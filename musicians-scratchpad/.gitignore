@@ -9,9 +9,22 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
-.kotlin/
-*.orig.*
+# iOS — ignore build artifacts, track source
+ios/Pods/
+ios/build/
+ios/.xcode.env.local
+ios/musiciansscratchpad.xcworkspace/xcuserdata/
+ios/*.xcworkspace/xcuserdata/
+ios/DerivedData/
+
+# Android — ignore build artifacts, track source
+android/.gradle/
+android/build/
+android/app/build/
+android/.kotlin/
+android/app/release/
+
+# Native secrets / certs
 *.jks
 *.p8
 *.p12
@@ -35,7 +48,3 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
-
-# generated native folders
-/ios
-/android
