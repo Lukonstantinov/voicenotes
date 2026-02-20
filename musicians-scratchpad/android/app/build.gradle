@@ -88,6 +88,14 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace 'com.dev.musicianscratchpad'
+
+    // Include native Kotlin sources that live in the architecture-mandated location
+    sourceSets {
+        main {
+            java.srcDirs += ['../../src/native/android']
+        }
+    }
+
     defaultConfig {
         applicationId 'com.dev.musicianscratchpad'
         minSdkVersion rootProject.ext.minSdkVersion

@@ -34,5 +34,13 @@
     "ts-jest": "^29.4.6",
     "typescript": "~5.9.2"
   },
-  "private": true
+  "private": true,
+  "codegenConfig": {
+    "name": "AudioPitchSpec",
+    "type": "modules",
+    "jsSrcsDir": "src/bridge",
+    "android": {
+      "javaPackageName": "com.dev.musicianscratchpad"
+    }
+  }
 }
