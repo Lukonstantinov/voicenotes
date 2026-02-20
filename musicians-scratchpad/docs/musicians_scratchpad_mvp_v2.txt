@@ -1,0 +1,108 @@
+MUSICIAN'S SCRATCHPAD — FULL MVP SPECIFICATION v2
+==================================================
+
+OVERVIEW
+--------
+This app detects monophonic pitch in real time. Architecture: fully native
+audio pipeline (AVAudioEngine iOS, Oboe/AudioRecord Android), YIN algorithm
+for pitch detection, signal conditioning (RMS silence gate at -40dBFS,
+confidence hysteresis enter 0.85 / exit 0.75, octave jump suppression for
+3 frames, 3-frame median filter), atomic shared state, JS polls via
+requestAnimationFrame at 30fps, React UI displays note name + frequency +
+cent deviation.
+
+AUDIO PIPELINE
+--------------
+Buffer: 1024 capture, 2048 overlapping analysis.
+Sample rate: query device native (never hardcode).
+Target latency: < 80ms.
+Reference: A4 = 440Hz.
+Tuning system: Equal temperament 12-TET.
+Accidentals: Sharps only for MVP.
+
+SIGNAL CONDITIONING PIPELINE (exact order)
+-------------------------------------------
+1. RMS Silence Gate     → -40dBFS threshold → null if silent
+2. YIN pitch detection  → {frequency, confidence} or null
+3. Confidence Hysteresis
+     Showing: exit if confidence < 0.75
+     Not showing: enter only if confidence >= 0.85
+4. Octave Jump Suppression
+     Ratio ~2.0 or ~0.5 → hold previous for up to 3 frames
+5. 3-Frame Median Filter → smoothed frequency
+6. Write to atomic shared state
+
+YIN CONSTANTS
+-------------
+YIN_THRESHOLD       = 0.12
+CONFIDENCE_ENTER    = 0.85
+CONFIDENCE_EXIT     = 0.75
+RMS_SILENCE_DB      = -40.0
+MIN_FREQUENCY       = 75.0 Hz
+MAX_FREQUENCY       = 2000.0 Hz
+MEDIAN_WINDOW       = 3 frames
+OCTAVE_SUPPRESS_MAX = 3 frames
+
+USER INTERFACE
+--------------
+- Start/Stop button (toggle)
+- Large note display (e.g. "A4")
+- Frequency in Hz (e.g. "440.0 Hz")
+- Cent indicator (±50 range)
+- Confidence gate: show "---" when confidence is low
+- Status bar (idle / listening / error states)
+- 3-second silence hint: "Try humming or playing a note"
+- Permission denied → error message + Settings deep link
+
+LIFECYCLE
+---------
+- Background transition: stop everything, store wasListening flag
+- Foreground transition: resume if wasListening was true
+- Audio interruption (iOS): native AVAudioSession interruption handler
+- Permission denied: show error + Settings link, do not crash
+
+CONSTRAINTS (MVP — DO NOT ADD THESE)
+-------------------------------------
+- Monophonic only (no chord detection)
+- Local only (no network/cloud)
+- No recording to file
+- No playback
+- No MIDI export
+- No custom tuning (A4=440 fixed)
+- Expo dev build only (not Expo Go)
+- New Architecture from day 1 (TurboModules + Fabric)
+
+KNOWN LIMITATIONS (physics, not bugs)
+--------------------------------------
+- Octave errors on breathy vocals
+- Android latency varies 50–250ms by device
+- Bass below E2 (~82Hz) unreliable
+- Noise may cause false positives at low confidence thresholds
+
+BRIDGE INTERFACE
+----------------
+TurboModule exposes exactly three functions:
+  startListening(): void
+  stopListening():  void
+  getLatestPitch(): PitchResult | null   // synchronous JSI — no promises
+
+PitchResult shape:
+  frequency:  number   // Hz (e.g. 440.0)
+  noteName:   string   // e.g. "A"
+  octave:     number   // e.g. 4
+  fullName:   string   // e.g. "A4"
+  cents:      number   // -50 to +50
+  confidence: number   // 0.0 to 1.0
+  timestamp:  number   // native monotonic clock, ms
+
+getLatestPitch() returns null when:
+  - confidence below threshold
+  - data is stale (> 200ms since last update)
+
+FORBIDDEN DEPENDENCIES
+----------------------
+expo-av, pitchfinder, redux, mobx, zustand, react-native-audio-recorder-player
+
+ALLOWED DEPENDENCIES
+--------------------
+expo (core), jest, typescript, react-native-reanimated (only if requested)
