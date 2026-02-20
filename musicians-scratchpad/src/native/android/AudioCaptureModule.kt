@@ -6,10 +6,10 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.bridge.WritableMap
 import com.facebook.react.module.annotations.ReactModule
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
@@ -109,23 +109,21 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     }
 
     /**
-     * Synchronous getter — called on JS thread.
-     * isBlockingSynchronousMethod = true makes it synchronous in the legacy bridge.
-     * In TurboModule / New Architecture, non-Promise methods are automatically
-     * synchronous via JSI (the annotation is advisory there).
+     * Reads latest pitch from in-memory atomic state and resolves the Promise.
+     * Promise-based so it works in both legacy bridge and bridgeless New Architecture.
      */
-    @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getLatestPitch(): WritableMap? {
+    @ReactMethod
+    fun getLatestPitch(promise: Promise) {
         val state: PitchState
         synchronized(stateLock) { state = latestState }
 
-        if (!state.isValid) return null
+        if (!state.isValid) { promise.resolve(null); return }
 
         // Stale-data guard: > 200 ms → null
         val nowMs = System.currentTimeMillis().toDouble()
-        if (nowMs - state.timestamp > 200) return null
+        if (nowMs - state.timestamp > 200) { promise.resolve(null); return }
 
-        return Arguments.createMap().apply {
+        promise.resolve(Arguments.createMap().apply {
             putDouble("frequency",  state.frequency.toDouble())
             putString("noteName",   state.noteName)
             putInt   ("octave",     state.octave)
@@ -133,7 +131,7 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
             putInt   ("cents",      state.cents)
             putDouble("confidence", state.confidence.toDouble())
             putDouble("timestamp",  state.timestamp)
-        }
+        })
     }
 
     // ─────────────────────────────────────────────────────────
@@ -141,6 +139,8 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     // ─────────────────────────────────────────────────────────
 
     private fun setupAndStart() {
+        using16bit = false  // reset before each setup; set to true only if 16-bit path is taken
+
         val audioManager = reactContext.getSystemService(android.content.Context.AUDIO_SERVICE)
                 as AudioManager
         sampleRate = audioManager
@@ -255,7 +255,6 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
         isShowingPitch   = false
         prevFrequency    = 0f
         octaveHoldCount  = 0
-        using16bit       = false
     }
 
     // ─────────────────────────────────────────────────────────

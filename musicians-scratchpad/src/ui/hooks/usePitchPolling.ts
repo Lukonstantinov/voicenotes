@@ -17,24 +17,36 @@ export function usePitchPolling(isListening: boolean): PitchResult | null {
 
     let rafId: number;
     let lastFrameTime = 0;
+    let active = true;
 
-    const poll = (currentTime: number) => {
+    const poll = async (currentTime: number) => {
+      if (!active) return;
       if (currentTime - lastFrameTime >= FRAME_INTERVAL_MS) {
         lastFrameTime = currentTime;
-        const result = AudioPitchModule.getLatestPitch();
-        if (result && result.timestamp !== lastTimestamp.current) {
-          lastTimestamp.current = result.timestamp;
-          setPitch(result);
-        } else if (!result) {
-          setPitch(null);
-          lastTimestamp.current = 0;
+        try {
+          const result = await AudioPitchModule.getLatestPitch();
+          if (!active) return;
+          if (result && result.timestamp !== lastTimestamp.current) {
+            lastTimestamp.current = result.timestamp;
+            setPitch(result);
+          } else if (!result) {
+            setPitch(null);
+            lastTimestamp.current = 0;
+          }
+        } catch (_) {
+          // ignore transient native errors
         }
       }
-      rafId = requestAnimationFrame(poll);
+      if (active) {
+        rafId = requestAnimationFrame(poll);
+      }
     };
 
     rafId = requestAnimationFrame(poll);
-    return () => cancelAnimationFrame(rafId);
+    return () => {
+      active = false;
+      cancelAnimationFrame(rafId);
+    };
   }, [isListening]);
 
   return pitch;

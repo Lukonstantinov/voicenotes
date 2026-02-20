@@ -20,8 +20,7 @@ export interface PitchResult {
 export interface Spec extends TurboModule {
   startListening(): void;
   stopListening(): void;
-  // Non-Promise return → synchronous JSI call in TurboModule runtime
-  getLatestPitch(): PitchResult | null;
+  getLatestPitch(): Promise<PitchResult | null>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('AudioPitch');
