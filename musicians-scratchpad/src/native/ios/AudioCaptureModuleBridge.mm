@@ -20,6 +20,11 @@
 RCT_EXTERN_METHOD(startListening)
 RCT_EXTERN_METHOD(stopListening)
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(getLatestPitch)
+RCT_EXTERN_METHOD(setSensitivity:(float)db)
+RCT_EXTERN_METHOD(analyzeFileRoadmap:(NSString *)uri
+                  segmentSec:(double)segmentSec
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
 
 @end
 

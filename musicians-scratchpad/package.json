@@ -16,13 +16,30 @@
       "**/__tests__/**/*.test.ts",
       "**/*.test.ts"
     ],
-    "moduleFileExtensions": ["ts", "tsx", "js", "jsx", "json"],
+    "moduleFileExtensions": [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "json"
+    ],
     "transform": {
-      "^.+\\.tsx?$": ["ts-jest", { "tsconfig": { "strict": true } }]
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "strict": true
+          }
+        }
+      ]
     }
   },
   "dependencies": {
     "expo": "~54.0.33",
+    "expo-av": "~15.0.2",
+    "expo-document-picker": "~14.0.0",
+    "expo-print": "~15.0.0",
+    "expo-sharing": "~14.0.0",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
     "react-native": "0.81.5"
