@@ -6,11 +6,11 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import com.facebook.react.bridge.Arguments
-import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.module.annotations.ReactModule
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.log10
@@ -33,22 +33,9 @@ private const val MEDIAN_WINDOW       = 3
 private const val OCTAVE_SUPPRESS_MAX = 3
 private const val ANALYSIS_SIZE       = 2048
 private const val CAPTURE_SIZE        = 1024
+private const val EMIT_INTERVAL_MS    = 33L   // ~30 fps event rate
 
 private val NOTE_NAMES = arrayOf("C","C#","D","D#","E","F","F#","G","G#","A","A#","B")
-
-// ─────────────────────────────────────────────────────────────
-// Shared state
-// ─────────────────────────────────────────────────────────────
-private data class PitchState(
-    val frequency:  Float  = 0f,
-    val noteName:   String = "",
-    val octave:     Int    = 0,
-    val fullName:   String = "",
-    val cents:      Int    = 0,
-    val confidence: Float  = 0f,
-    val timestamp:  Double = 0.0,
-    val isValid:    Boolean = false
-)
 
 // ─────────────────────────────────────────────────────────────
 // Module
@@ -76,7 +63,7 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     private val yinCMND       = FloatArray(ANALYSIS_SIZE / 2)
     private val medianBuf     = FloatArray(MEDIAN_WINDOW)
     private val captureChunk  = FloatArray(CAPTURE_SIZE)
-    private val shortChunk    = ShortArray(CAPTURE_SIZE)   // used when PCM_FLOAT unavailable
+    private val shortChunk    = ShortArray(CAPTURE_SIZE)
     private var using16bit    = false
 
     private var ringWritePos  = 0
@@ -89,9 +76,8 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     private var prevFrequency    = 0f
     private var octaveHoldCount  = 0
 
-    // Atomic state (guarded by stateLock)
-    private val stateLock = Any()
-    @Volatile private var latestState = PitchState()
+    // Event throttle
+    @Volatile private var lastEmitMs = 0L
 
     // ─────────────────────────────────────────────────────────
     // JS API
@@ -108,30 +94,38 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
         stop()
     }
 
-    /**
-     * Reads latest pitch from in-memory atomic state and resolves the Promise.
-     * Promise-based so it works in both legacy bridge and bridgeless New Architecture.
-     */
-    @ReactMethod
-    fun getLatestPitch(promise: Promise) {
-        val state: PitchState
-        synchronized(stateLock) { state = latestState }
+    // Required by NativeEventEmitter on the JS side
+    @ReactMethod fun addListener(@Suppress("UNUSED_PARAMETER") eventName: String) {}
+    @ReactMethod fun removeListeners(@Suppress("UNUSED_PARAMETER") count: Int) {}
 
-        if (!state.isValid) { promise.resolve(null); return }
+    // ─────────────────────────────────────────────────────────
+    // Event emission  (called from capture thread)
+    // ─────────────────────────────────────────────────────────
 
-        // Stale-data guard: > 200 ms → null
-        val nowMs = System.currentTimeMillis().toDouble()
-        if (nowMs - state.timestamp > 200) { promise.resolve(null); return }
+    private fun emitPitch(
+        freq: Float, noteName: String, octave: Int,
+        fullName: String, cents: Int, confidence: Float, tsMs: Double
+    ) {
+        if (!reactContext.hasActiveReactInstance()) return
+        val map = Arguments.createMap().apply {
+            putDouble("frequency",  freq.toDouble())
+            putString("noteName",   noteName)
+            putInt   ("octave",     octave)
+            putString("fullName",   fullName)
+            putInt   ("cents",      cents)
+            putDouble("confidence", confidence.toDouble())
+            putDouble("timestamp",  tsMs)
+        }
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("pitchUpdate", map)
+    }
 
-        promise.resolve(Arguments.createMap().apply {
-            putDouble("frequency",  state.frequency.toDouble())
-            putString("noteName",   state.noteName)
-            putInt   ("octave",     state.octave)
-            putString("fullName",   state.fullName)
-            putInt   ("cents",      state.cents)
-            putDouble("confidence", state.confidence.toDouble())
-            putDouble("timestamp",  state.timestamp)
-        })
+    private fun emitNull() {
+        if (!reactContext.hasActiveReactInstance()) return
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("pitchUpdate", null)
     }
 
     // ─────────────────────────────────────────────────────────
@@ -139,7 +133,7 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     // ─────────────────────────────────────────────────────────
 
     private fun setupAndStart() {
-        using16bit = false  // reset before each setup; set to true only if 16-bit path is taken
+        using16bit = false
 
         val audioManager = reactContext.getSystemService(android.content.Context.AUDIO_SERVICE)
                 as AudioManager
@@ -148,18 +142,13 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
             ?.toIntOrNull() ?: 48000
 
         val minBufFloat = AudioRecord.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_FLOAT)
+            sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_FLOAT)
         val bufSizeFloat = maxOf(minBufFloat, CAPTURE_SIZE * 4)
 
         // Attempt 1: UNPROCESSED + float
         val ar = AudioRecord(
-            MediaRecorder.AudioSource.UNPROCESSED,
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_FLOAT,
-            bufSizeFloat)
+            MediaRecorder.AudioSource.UNPROCESSED, sampleRate,
+            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_FLOAT, bufSizeFloat)
 
         if (ar.state == AudioRecord.STATE_INITIALIZED) {
             audioRecord = ar
@@ -169,11 +158,8 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
 
             // Attempt 2: VOICE_RECOGNITION + float
             val ar2 = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                sampleRate,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_FLOAT,
-                bufSizeFloat)
+                MediaRecorder.AudioSource.VOICE_RECOGNITION, sampleRate,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_FLOAT, bufSizeFloat)
 
             if (ar2.state == AudioRecord.STATE_INITIALIZED) {
                 audioRecord = ar2
@@ -183,14 +169,10 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
 
                 // Attempt 3: VOICE_RECOGNITION + 16-bit (universally supported)
                 val minBuf16 = AudioRecord.getMinBufferSize(
-                    sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT)
+                    sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
                 val ar3 = AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                    sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION, sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
                     maxOf(minBuf16, CAPTURE_SIZE * 2))
 
                 if (ar3.state != AudioRecord.STATE_INITIALIZED) {
@@ -255,6 +237,7 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
         isShowingPitch   = false
         prevFrequency    = 0f
         octaveHoldCount  = 0
+        lastEmitMs       = 0L
     }
 
     // ─────────────────────────────────────────────────────────
@@ -316,36 +299,28 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
         medianCount = minOf(medianCount + 1, MEDIAN_WINDOW)
 
         freq = when (medianCount) {
-            1 -> medianBuf[0]
-            2 -> (medianBuf[0] + medianBuf[1]) / 2f
-            else -> {
-                val sorted = medianBuf.copyOf(MEDIAN_WINDOW).also { it.sort() }
-                sorted[1]  // median of 3
-            }
+            1    -> medianBuf[0]
+            2    -> (medianBuf[0] + medianBuf[1]) / 2f
+            else -> medianBuf.copyOf(MEDIAN_WINDOW).also { it.sort() }[1]
         }
 
         val note = frequencyToNote(freq) ?: return
 
-        // [6] Write atomic state
+        // [6] Emit event (throttled to ~30 fps)
         isShowingPitch = true
-        val tsMs = System.currentTimeMillis().toDouble()
-
-        synchronized(stateLock) {
-            latestState = PitchState(
-                frequency  = freq,
-                noteName   = note.noteName,
-                octave     = note.octave,
-                fullName   = note.fullName,
-                cents      = note.cents,
-                confidence = confidence,
-                timestamp  = tsMs,
-                isValid    = true)
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastEmitMs >= EMIT_INTERVAL_MS) {
+            lastEmitMs = nowMs
+            emitPitch(freq, note.noteName, note.octave, note.fullName,
+                      note.cents, confidence, nowMs.toDouble())
         }
     }
 
     private fun clearState() {
+        if (!isShowingPitch) return   // avoid repeated null emissions during silence
         isShowingPitch = false
-        synchronized(stateLock) { latestState = PitchState() }
+        lastEmitMs = 0L
+        emitNull()
     }
 
     // ─────────────────────────────────────────────────────────
