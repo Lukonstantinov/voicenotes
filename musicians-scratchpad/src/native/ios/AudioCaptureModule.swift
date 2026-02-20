@@ -99,6 +99,180 @@ class AudioCaptureModule: NSObject {
     rmsSilenceDb = db
   }
 
+  // MARK: - File roadmap analysis
+
+  /// Analyse an audio file in fixed-duration segments and return a note roadmap.
+  /// Runs on a background queue; resolves/rejects on main queue.
+  @objc func analyzeFileRoadmap(
+    _ uri: String,
+    segmentSec: Double,
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      guard let self = self else { return }
+
+      // ── 1. Build URL ────────────────────────────────────────────────────────
+      let url: URL
+      if uri.hasPrefix("file://") {
+        guard let u = URL(string: uri) else {
+          reject("INVALID_URI", "Cannot parse URI: \(uri)", nil); return
+        }
+        url = u
+      } else {
+        url = URL(fileURLWithPath: uri)
+      }
+
+      // ── 2. Open file ────────────────────────────────────────────────────────
+      let file: AVAudioFile
+      do { file = try AVAudioFile(forReading: url) } catch {
+        reject("OPEN_FAILED", error.localizedDescription, error as NSError); return
+      }
+
+      let fileSR    = file.fileFormat.sampleRate
+      let maxFrames = min(file.length, Int64(fileSR * 300)) // 5-min cap
+      let spSeg     = max(Int(fileSR * segmentSec), kAnalysisSize) // min 1 YIN window
+
+      // ── 3. Decode buffer: mono float32 ─────────────────────────────────────
+      guard
+        let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                sampleRate: fileSR, channels: 1, interleaved: false),
+        let buf = AVAudioPCMBuffer(pcmFormat: fmt,
+                                   frameCapacity: AVAudioFrameCount(kCaptureSize))
+      else {
+        reject("BUFFER_ALLOC", "Cannot allocate decode buffer", nil); return
+      }
+
+      // ── 4. Local DSP state (isolated from live-capture buffers) ─────────────
+      var ring = [Float](repeating: 0, count: kAnalysisSize)
+      var win  = [Float](repeating: 0, count: kAnalysisSize)
+      var yd   = [Float](repeating: 0, count: kAnalysisSize / 2)
+      var yc   = [Float](repeating: 0, count: kAnalysisSize / 2)
+      var rp   = 0; var sIR = 0
+
+      // ── 5. Vote accumulators ────────────────────────────────────────────────
+      var segVote    = [Float](repeating: 0, count: 128)
+      var globalVote = [Float](repeating: 0, count: 128)
+      var segSamples = 0
+      var segStart   = 0.0
+      var totalRead: Int64 = 0
+      var segments   = [[String: Any]]()
+
+      // ── YIN on current win[] → (midi, confidence) or nil ───────────────────
+      func runYIN() -> (Int, Float)? {
+        let half = kAnalysisSize / 2
+        for tau in 1..<half {
+          var d: Float = 0
+          for j in 0..<half { let x = win[j] - win[j + tau]; d += x * x }
+          yd[tau] = d
+        }
+        yc[0] = 1; var rs: Float = 0
+        for tau in 1..<half {
+          rs += yd[tau]
+          yc[tau] = rs > 0 ? yd[tau] * Float(tau) / rs : 1
+        }
+        var tauEst = -1
+        for tau in 2..<half - 1 {
+          if yc[tau] < kYinThreshold {
+            var t = tau
+            while t + 1 < half - 1, yc[t + 1] < yc[t] { t += 1 }
+            tauEst = t; break
+          }
+        }
+        guard tauEst > 0 else { return nil }
+        let pv = max(1, tauEst - 1); let nx = min(half - 2, tauEst + 1)
+        let dn = 2 * (yc[pv] - 2 * yc[tauEst] + yc[nx])
+        let rf: Float = abs(dn) > 1e-8
+          ? Float(tauEst) + (yc[pv] - yc[nx]) / dn
+          : Float(tauEst)
+        let freq = Float(fileSR) / rf
+        guard freq >= kMinFrequency, freq <= kMaxFrequency else { return nil }
+        let conf = max(0, min(1, 1 - yc[tauEst]))
+        guard conf >= kConfidenceEnter else { return nil }
+        let midi = max(0, min(127, Int((12 * log2(Double(freq) / 440) + 69).rounded())))
+        return (midi, conf)
+      }
+
+      // ── Feed n samples into ring, run analysis when full ───────────────────
+      func feedSamples(_ ch: UnsafePointer<Float>, _ n: Int) {
+        for i in 0..<n {
+          ring[rp] = ch[i]
+          rp = (rp + 1) & (kAnalysisSize - 1)
+        }
+        sIR = min(sIR + n, kAnalysisSize)
+        guard sIR >= kAnalysisSize else { return }
+        for i in 0..<kAnalysisSize { win[i] = ring[(rp + i) & (kAnalysisSize - 1)] }
+        var sq: Float = 0; for v in win { sq += v * v }
+        guard (sq > 0 ? 20 * log10f(sqrtf(sq / Float(kAnalysisSize))) : -200) >= self.rmsSilenceDb
+        else { return }
+        if let (midi, conf) = runYIN() { segVote[midi] += conf }
+      }
+
+      // ── Finalize segment, reset for next ───────────────────────────────────
+      func flushSegment() {
+        let segEnd = segStart + Double(segSamples) / fileSR
+        let total  = segVote.reduce(0, +)
+        if total > 0 {
+          let midi = segVote.indices.max(by: { segVote[$0] < segVote[$1] })!
+          let conf = segVote[midi] / total
+          let freq = Float(440.0 * pow(2.0, Double(midi - 69) / 12.0))
+          if let note = self.frequencyToNote(freq) {
+            segments.append([
+              "startSec": segStart,   "endSec": segEnd,
+              "noteName": note.noteName, "octave": note.octave,
+              "fullName": note.fullName, "confidence": Double(conf), "hasNote": true,
+            ])
+            for i in 0..<128 { globalVote[i] += segVote[i] }
+          } else {
+            segments.append(["startSec": segStart, "endSec": segEnd,
+              "noteName": "", "octave": 0, "fullName": "", "confidence": 0.0, "hasNote": false])
+          }
+        } else {
+          segments.append(["startSec": segStart, "endSec": segEnd,
+            "noteName": "", "octave": 0, "fullName": "", "confidence": 0.0, "hasNote": false])
+        }
+        segStart   += Double(segSamples) / fileSR
+        segSamples  = 0
+        for i in 0..<128 { segVote[i] = 0 }
+      }
+
+      // ── 6. Main decode + analysis loop ─────────────────────────────────────
+      file.framePosition = 0
+      while totalRead < maxFrames {
+        buf.frameLength = 0
+        do { try file.read(into: buf, frameCount: AVAudioFrameCount(kCaptureSize)) } catch { break }
+        let n = Int(buf.frameLength); if n == 0 { break }
+        guard let ch = buf.floatChannelData?[0] else { break }
+
+        var i = 0
+        while i < n, totalRead < maxFrames {
+          let take = min(n - i, spSeg - segSamples)
+          feedSamples(ch + i, take)
+          segSamples += take; totalRead += Int64(take); i += take
+          if segSamples >= spSeg { flushSegment() }
+        }
+      }
+      if segSamples > 0 { flushSegment() }
+
+      // ── 7. Dominant note across whole file ─────────────────────────────────
+      let gTotal = globalVote.reduce(0, +)
+      var dominantNote = ""
+      if gTotal > 0 {
+        let best = globalVote.indices.max(by: { globalVote[$0] < globalVote[$1] })!
+        let freq = Float(440.0 * pow(2.0, Double(best - 69) / 12.0))
+        if let note = self.frequencyToNote(freq) { dominantNote = note.fullName }
+      }
+
+      DispatchQueue.main.async {
+        resolve([
+          "segments":      segments,
+          "dominantNote":  dominantNote,
+          "totalDuration": Double(totalRead) / fileSR,
+        ] as NSDictionary)
+      }
+    }
+  }
+
   /// Called on the JS thread — must return synchronously.
   @objc func getLatestPitch() -> Any? {
     var state: PitchState

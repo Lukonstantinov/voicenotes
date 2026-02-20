@@ -3,9 +3,13 @@ package com.dev.musicianscratchpad
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaRecorder
 import android.util.Log
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -390,6 +394,243 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
         val noteName    = NOTE_NAMES[noteIdx]
         val octave      = midiNearest / 12 - 1
         return NoteInfo(noteName, octave, "$noteName$octave", cents)
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // File roadmap analysis
+    // ─────────────────────────────────────────────────────────
+
+    @ReactMethod
+    fun analyzeFileRoadmap(uri: String, segmentSec: Double, promise: Promise) {
+        Thread {
+            try {
+                val ctx        = reactContext.applicationContext
+                val androidUri = android.net.Uri.parse(uri)
+
+                // ── Find audio track ───────────────────────────────────────────
+                val extractor = MediaExtractor()
+                extractor.setDataSource(ctx, androidUri, null)
+
+                var trackIdx: Int = -1
+                var inputFmt: MediaFormat? = null
+                for (i in 0 until extractor.trackCount) {
+                    val fmt  = extractor.getTrackFormat(i)
+                    val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+                    if (mime.startsWith("audio/")) { trackIdx = i; inputFmt = fmt; break }
+                }
+                if (trackIdx < 0 || inputFmt == null) {
+                    extractor.release()
+                    promise.reject("NO_AUDIO_TRACK", "No audio track found"); return@Thread
+                }
+                extractor.selectTrack(trackIdx)
+
+                val mime   = inputFmt.getString(MediaFormat.KEY_MIME)!!
+                val fileSR = inputFmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                val chanIn = inputFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+
+                val maxSamples    = (fileSR * 300).toLong()   // 5-min cap
+                val samplesPerSeg = maxOf((fileSR * segmentSec).toInt(), ANALYSIS_SIZE)
+
+                // ── Setup codec ────────────────────────────────────────────────
+                val codec = MediaCodec.createDecoderByType(mime)
+                codec.configure(inputFmt, null, null, 0)
+                codec.start()
+
+                var outChannels = chanIn
+                var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
+
+                // ── Local DSP state ────────────────────────────────────────────
+                val ring = FloatArray(ANALYSIS_SIZE)
+                val win  = FloatArray(ANALYSIS_SIZE)
+                val yd   = FloatArray(ANALYSIS_SIZE / 2)
+                val yc   = FloatArray(ANALYSIS_SIZE / 2)
+                var rp   = 0; var sIR = 0
+
+                val segVote    = FloatArray(128)
+                val globalVote = FloatArray(128)
+                var segSamples = 0
+                var segStart   = 0.0
+                val segments   = mutableListOf<Map<String, Any>>()
+                var totalRead  = 0L
+
+                // ── YIN ────────────────────────────────────────────────────────
+                fun runYIN(): Pair<Int, Float>? {
+                    val half = ANALYSIS_SIZE / 2
+                    for (tau in 1 until half) {
+                        var d = 0f
+                        for (j in 0 until half) { val x = win[j]-win[j+tau]; d += x*x }
+                        yd[tau] = d
+                    }
+                    yc[0] = 1f; var rs = 0f
+                    for (tau in 1 until half) {
+                        rs += yd[tau]
+                        yc[tau] = if (rs > 0f) yd[tau]*tau/rs else 1f
+                    }
+                    var tauEst = -1
+                    for (tau in 2 until half-1) {
+                        if (yc[tau] < YIN_THRESHOLD) {
+                            var t = tau; while (t+1 < half-1 && yc[t+1] < yc[t]) t++
+                            tauEst = t; break
+                        }
+                    }
+                    if (tauEst <= 0) return null
+                    val pv = maxOf(1, tauEst-1); val nx = minOf(half-2, tauEst+1)
+                    val dn = 2f*(yc[pv]-2f*yc[tauEst]+yc[nx])
+                    val rf = if (abs(dn) > 1e-8f) tauEst+(yc[pv]-yc[nx])/dn else tauEst.toFloat()
+                    val freq = fileSR.toFloat()/rf
+                    if (freq < MIN_FREQUENCY || freq > MAX_FREQUENCY) return null
+                    val conf = maxOf(0f, minOf(1f, 1f-yc[tauEst]))
+                    if (conf < CONFIDENCE_ENTER) return null
+                    val midi = maxOf(0, minOf(127, round(12.0*log2(freq.toDouble()/440.0)+69.0).toInt()))
+                    return Pair(midi, conf)
+                }
+
+                // ── Feed samples into ring + run analysis ──────────────────────
+                fun feedSamples(samples: FloatArray, off: Int, n: Int) {
+                    for (i in 0 until n) {
+                        ring[rp] = samples[off+i]; rp = (rp+1) and (ANALYSIS_SIZE-1)
+                    }
+                    sIR = minOf(sIR+n, ANALYSIS_SIZE)
+                    if (sIR < ANALYSIS_SIZE) return
+                    for (i in 0 until ANALYSIS_SIZE) win[i] = ring[(rp+i) and (ANALYSIS_SIZE-1)]
+                    var sq = 0f; for (v in win) sq += v*v
+                    val rmsDb = if (sq > 0f) 20f*log10(sqrt(sq/ANALYSIS_SIZE)) else -200f
+                    if (rmsDb < rmsSilenceDb) return
+                    val res = runYIN() ?: return
+                    segVote[res.first] += res.second
+                }
+
+                // ── Flush segment → append to results ─────────────────────────
+                fun flushSegment() {
+                    val segEnd = segStart + segSamples.toDouble()/fileSR
+                    val total  = segVote.sum()
+                    if (total > 0f) {
+                        val midi = segVote.indices.maxByOrNull { segVote[it] }!!
+                        val conf = segVote[midi]/total
+                        val note = frequencyToNote((440.0*2.0.pow((midi-69).toDouble()/12.0)).toFloat())
+                        if (note != null) {
+                            segments.add(mapOf(
+                                "startSec"   to segStart,         "endSec"     to segEnd,
+                                "noteName"   to note.noteName,    "octave"     to note.octave,
+                                "fullName"   to note.fullName,    "confidence" to conf.toDouble(),
+                                "hasNote"    to true))
+                            for (i in 0 until 128) globalVote[i] += segVote[i]
+                        } else {
+                            segments.add(mapOf("startSec" to segStart, "endSec" to segEnd,
+                                "noteName" to "", "octave" to 0, "fullName" to "",
+                                "confidence" to 0.0, "hasNote" to false))
+                        }
+                    } else {
+                        segments.add(mapOf("startSec" to segStart, "endSec" to segEnd,
+                            "noteName" to "", "octave" to 0, "fullName" to "",
+                            "confidence" to 0.0, "hasNote" to false))
+                    }
+                    segStart   += segSamples.toDouble()/fileSR
+                    segSamples  = 0
+                    segVote.fill(0f)
+                }
+
+                // ── Decode + process loop ──────────────────────────────────────
+                val TIMEOUT_US  = 5_000L
+                var inputDone   = false
+                var outputDone  = false
+
+                while (!outputDone && totalRead < maxSamples) {
+                    if (!inputDone) {
+                        val inIdx = codec.dequeueInputBuffer(TIMEOUT_US)
+                        if (inIdx >= 0) {
+                            val inBuf = codec.getInputBuffer(inIdx)!!
+                            val read  = extractor.readSampleData(inBuf, 0)
+                            if (read < 0) {
+                                codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputDone = true
+                            } else {
+                                codec.queueInputBuffer(inIdx, 0, read, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                    val info   = MediaCodec.BufferInfo()
+                    val outIdx = codec.dequeueOutputBuffer(info, TIMEOUT_US)
+                    when {
+                        outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            val outFmt = codec.outputFormat
+                            outChannels = outFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                            pcmEncoding = if (outFmt.containsKey(MediaFormat.KEY_PCM_ENCODING))
+                                outFmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                            else AudioFormat.ENCODING_PCM_16BIT
+                        }
+                        outIdx >= 0 -> {
+                            val outBuf = codec.getOutputBuffer(outIdx)!!
+                            outBuf.position(info.offset); outBuf.limit(info.offset + info.size)
+
+                            // Convert to mono float32
+                            val mono: FloatArray = if (pcmEncoding == AudioFormat.ENCODING_PCM_FLOAT) {
+                                val fb  = outBuf.asFloatBuffer()
+                                val raw = FloatArray(fb.remaining()) { fb.get() }
+                                if (outChannels == 1) raw
+                                else FloatArray(raw.size/outChannels) { i ->
+                                    var s = 0f; for (c in 0 until outChannels) s += raw[i*outChannels+c]
+                                    s/outChannels }
+                            } else {
+                                val sb  = outBuf.asShortBuffer()
+                                val raw = ShortArray(sb.remaining()) { sb.get() }
+                                if (outChannels == 1) FloatArray(raw.size) { raw[it]/32768f }
+                                else FloatArray(raw.size/outChannels) { i ->
+                                    var s = 0f; for (c in 0 until outChannels) s += raw[i*outChannels+c]/32768f
+                                    s/outChannels }
+                            }
+
+                            var i = 0
+                            while (i < mono.size && totalRead < maxSamples) {
+                                val take = minOf(mono.size-i, samplesPerSeg-segSamples)
+                                feedSamples(mono, i, take)
+                                segSamples += take; totalRead += take; i += take
+                                if (segSamples >= samplesPerSeg) flushSegment()
+                            }
+                            codec.releaseOutputBuffer(outIdx, false)
+                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                        }
+                    }
+                }
+                if (segSamples > 0) flushSegment()
+
+                codec.stop(); codec.release(); extractor.release()
+
+                // ── Dominant note ──────────────────────────────────────────────
+                val gTotal = globalVote.sum()
+                var dominantNote = ""
+                if (gTotal > 0f) {
+                    val best = globalVote.indices.maxByOrNull { globalVote[it] }!!
+                    val freq = (440.0*2.0.pow((best-69).toDouble()/12.0)).toFloat()
+                    frequencyToNote(freq)?.let { dominantNote = it.fullName }
+                }
+
+                // ── Build result ───────────────────────────────────────────────
+                val segsArr = Arguments.createArray()
+                for (seg in segments) {
+                    Arguments.createMap().also { m ->
+                        m.putDouble ("startSec",   seg["startSec"]   as Double)
+                        m.putDouble ("endSec",     seg["endSec"]     as Double)
+                        m.putString ("noteName",   seg["noteName"]   as String)
+                        m.putInt    ("octave",     seg["octave"]     as Int)
+                        m.putString ("fullName",   seg["fullName"]   as String)
+                        m.putDouble ("confidence", seg["confidence"] as Double)
+                        m.putBoolean("hasNote",    seg["hasNote"]    as Boolean)
+                        segsArr.pushMap(m)
+                    }
+                }
+                val result = Arguments.createMap().apply {
+                    putArray ("segments",      segsArr)
+                    putString("dominantNote",  dominantNote)
+                    putDouble("totalDuration", totalRead.toDouble()/fileSR)
+                }
+                promise.resolve(result)
+
+            } catch (e: Exception) {
+                promise.reject("ANALYSIS_ERROR", e.message ?: "Unknown error", e)
+            }
+        }.apply { isDaemon = true; start() }
     }
 
     // ─────────────────────────────────────────────────────────

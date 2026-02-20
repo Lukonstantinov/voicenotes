@@ -287,20 +287,20 @@ src/ui/components/NoteRoadmap.tsx
 
 ## Open questions (to resolve before implementation)
 
-1. **Segment duration**: 4 s is a reasonable default for slow-moving harmony.
-   Should the user be able to adjust it (e.g. 2 s / 4 s / 8 s)?
+1. **Segment duration**: 1 s default; user-adjustable in settings (1 s / 2 s / 4 s / 8 s). ✅ **RESOLVED**
+2. **Silence segments**: Show previous note (hold) OR nothing — configurable in settings. ✅ **RESOLVED**
+3. **Octave locking**: Default = pitch class only ("C"). Settings toggle for full note ("C4"). ✅ **RESOLVED**
+4. **Audio playback scrubbing**: Implement. Tap segment → seek to that timestamp. ✅ **RESOLVED**
+5. **Export**: Plain text always; PDF optionally via expo-print + expo-sharing. ✅ **RESOLVED**
 
-2. **Silence segments**: If a segment is mostly silence (no confident frames),
-   should it show a "—" placeholder or be omitted from the roadmap entirely?
+## Decisions summary
 
-3. **Octave locking**: For a roadmap, should octave information be shown, or
-   should all notes be collapsed to pitch class only (e.g. "C" not "C4")?
-   Pitch-class-only reduces visual noise for vocal/harmonic analysis.
+| Setting | Default | Options |
+|---|---|---|
+| Segment duration | 1 s | 1 s / 2 s / 4 s / 8 s |
+| Silence segments | Gap (—) | Gap / Hold (repeat prev note) |
+| Note display | Pitch class ("C") | Note / Full ("C4") |
+| Playback | On | Tap to seek |
+| Export | Text + PDF | Share sheet |
 
-4. **Audio playback scrubbing**: Should tapping a roadmap segment play back
-   that part of the audio? This would require an audio player (e.g. expo-av
-   or a custom player) — a significant addition to the architecture.
-
-5. **Export**: Should the roadmap be exportable (e.g. copy as text, share as
-   image, or save as CSV with timestamps)?
 
