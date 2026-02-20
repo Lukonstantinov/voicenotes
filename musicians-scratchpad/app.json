@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "musicians-scratchpad",
+    "slug": "musicians-scratchpad",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dev.musicianscratchpad",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "This app needs microphone access to detect musical pitch in real time."
+      }
+    },
+    "android": {
+      "package": "com.dev.musicianscratchpad",
+      "permissions": ["android.permission.RECORD_AUDIO"],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
