@@ -22,6 +22,8 @@ export interface Spec extends TurboModule {
   stopListening(): void;
   // Non-Promise return → synchronous JSI call in TurboModule runtime
   getLatestPitch(): PitchResult | null;
+  // db: silence gate threshold in dBFS (e.g. -65 = very sensitive, -25 = loud only)
+  setSensitivity(db: number): void;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('AudioPitch');

@@ -18,6 +18,8 @@ import { CentIndicator } from './components/CentIndicator';
 import { ListenButton } from './components/ListenButton';
 import { AppStatusBar } from './components/AppStatusBar';
 import type { AppState as AudioAppState } from './components/AppStatusBar';
+import { SensitivityControl, SENSITIVITY_OPTIONS } from './components/SensitivityControl';
+import type { SensitivityLevel, SensitivityOption } from './components/SensitivityControl';
 
 const SILENCE_HINT_DELAY_MS = 3000;
 
@@ -48,9 +50,17 @@ export default function App() {
   const [audioState, setAudioState]   = useState<AudioAppState>('idle');
   const [isListening, setIsListening] = useState(false);
   const [showHint, setShowHint]       = useState(false);
+  // Default to 'soft' so the app triggers on quiet voices without needing to shout
+  const [sensitivity, setSensitivity] = useState<SensitivityLevel>('soft');
 
   const wasListeningRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Apply sensitivity to native module whenever the level changes (and on first mount)
+  useEffect(() => {
+    const opt = SENSITIVITY_OPTIONS.find(o => o.level === sensitivity);
+    if (opt) AudioPitchModule.setSensitivity(opt.db);
+  }, [sensitivity]);
 
   const pitch = usePitchPolling(isListening);
 
@@ -102,6 +112,10 @@ export default function App() {
     setAudioState('idle');
   }, []);
 
+  const handleSensitivityChange = useCallback((opt: SensitivityOption) => {
+    setSensitivity(opt.level);
+  }, []);
+
   const handleButtonPress = useCallback(async () => {
     if (isListening) { stopAudio(); return; }
 
@@ -128,6 +142,10 @@ export default function App() {
           disabled={audioState === 'requesting'}
         />
         <AppStatusBar appState={audioState} showHint={showHint} />
+        <SensitivityControl
+          selected={sensitivity}
+          onChange={handleSensitivityChange}
+        />
       </View>
     </SafeAreaView>
   );

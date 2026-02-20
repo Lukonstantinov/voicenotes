@@ -26,7 +26,7 @@ private const val TAG                 = "AudioPitch"
 private const val YIN_THRESHOLD       = 0.12f
 private const val CONFIDENCE_ENTER    = 0.85f
 private const val CONFIDENCE_EXIT     = 0.75f
-private const val RMS_SILENCE_DB      = -40.0f
+private const val RMS_SILENCE_DB_DEFAULT = -40.0f
 private const val MIN_FREQUENCY       = 75.0f
 private const val MAX_FREQUENCY       = 2000.0f
 private const val MEDIAN_WINDOW       = 3
@@ -87,6 +87,9 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     private var prevFrequency    = 0f
     private var octaveHoldCount  = 0
 
+    // Sensitivity / silence gate threshold (dBFS). @Volatile provides visibility across threads.
+    @Volatile private var rmsSilenceDb = RMS_SILENCE_DB_DEFAULT
+
     // Atomic state (guarded by stateLock)
     private val stateLock = Any()
     @Volatile private var latestState = PitchState()
@@ -104,6 +107,12 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     @ReactMethod
     fun stopListening() {
         stop()
+    }
+
+    /** Sets the RMS silence gate threshold (dBFS). Lower = more sensitive. Safe to call anytime. */
+    @ReactMethod
+    fun setSensitivity(db: Float) {
+        rmsSilenceDb = db
     }
 
     /**
@@ -242,7 +251,7 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
         for (v in analysisWin) sumSq += v * v
         val rms   = sqrt(sumSq / ANALYSIS_SIZE)
         val rmsDb = if (rms > 0f) 20f * log10(rms) else -200f
-        if (rmsDb < RMS_SILENCE_DB) { clearState(); return }
+        if (rmsDb < rmsSilenceDb) { clearState(); return }
 
         // [2] YIN
         val yinResult = yin() ?: run { clearState(); return }

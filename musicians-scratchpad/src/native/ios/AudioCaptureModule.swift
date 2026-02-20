@@ -7,7 +7,7 @@ import os.log
 private let kYinThreshold: Float     = 0.12
 private let kConfidenceEnter: Float  = 0.85
 private let kConfidenceExit: Float   = 0.75
-private let kRmsSilenceDb: Float     = -40.0
+private let kRmsSilenceDbDefault: Float = -40.0
 private let kMinFrequency: Float     = 75.0
 private let kMaxFrequency: Float     = 2000.0
 private let kMedianWindow: Int       = 3
@@ -52,6 +52,10 @@ class AudioCaptureModule: NSObject {
   private var medianIdx     = 0
   private var medianCount   = 0
 
+  // Sensitivity / silence gate threshold (dBFS). Written from JS thread, read on audio thread.
+  // arm64 guarantees 32-bit aligned store/load atomicity, so no lock needed for this scalar config.
+  private var rmsSilenceDb: Float = kRmsSilenceDbDefault
+
   // Signal-conditioning state
   private var isShowingPitch   = false
   private var prevFrequency: Float = 0
@@ -87,6 +91,12 @@ class AudioCaptureModule: NSObject {
   @objc func stopListening() {
     stopCapture()
     clearState()
+  }
+
+  /// Sets the RMS silence gate threshold (dBFS). Lower values = more sensitive.
+  /// Safe to call at any time; takes effect on the next audio buffer.
+  @objc func setSensitivity(_ db: Float) {
+    rmsSilenceDb = db
   }
 
   /// Called on the JS thread — must return synchronously.
@@ -226,7 +236,7 @@ class AudioCaptureModule: NSObject {
     for i in 0..<kAnalysisSize { sumSq += analysisWin[i] * analysisWin[i] }
     let rms   = sqrtf(sumSq / Float(kAnalysisSize))
     let rmsDb = rms > 0 ? 20 * log10f(rms) : -200
-    guard rmsDb >= kRmsSilenceDb else { clearState(); return }
+    guard rmsDb >= rmsSilenceDb else { clearState(); return }
 
     // [2] YIN
     guard let (rawFreq, confidence) = yin() else { clearState(); return }
