@@ -12,7 +12,8 @@ Follow this order. Complete each phase before moving to the next. Run the verifi
 5. Configure iOS Info.plist: add NSMicrophoneUsageDescription
 6. Configure Android AndroidManifest.xml: add RECORD_AUDIO permission
 7. Initialize git repo, create initial commit
-8. **Verify:** Project builds on iOS simulator showing default Expo screen
+8. Commit `android/` and `ios/` generated source (without Pods/build) so CI can build without re-running prebuild
+9. **Verify:** Project builds on iOS simulator showing default Expo screen. GitHub Actions workflow `.github/workflows/build-android.yml` is present and triggers on push.
 
 ### Phase 1: Utility Layer (Pure TypeScript)
 1. Create `src/utils/pitchUtils.ts` — frequencyToNote function
@@ -36,7 +37,7 @@ Follow this order. Complete each phase before moving to the next. Run the verifi
 3. Implement Oboe audio capture (LowLatency, Exclusive with Shared fallback). If Oboe fights the Expo build system, switch to AudioRecord — don't spend more than 30 minutes on Oboe config.
 4. Implement YIN + signal conditioning (same logic as iOS)
 5. Store result in atomic shared state, expose same TurboModule interface
-6. **Verify:** Android builds. Module accessible from JS.
+6. **Verify:** Android builds. Module accessible from JS. GitHub Actions APK build completes and artifact is downloadable from the Actions tab.
 
 ### Phase 4: React UI
 1. Create `src/hooks/usePitchPolling.ts` — requestAnimationFrame polling loop (30fps)
@@ -60,7 +61,7 @@ Follow this order. Complete each phase before moving to the next. Run the verifi
 2. Clean up console.logs and debug code
 3. Update README with build instructions and known issues
 4. Final git commit and push
-5. **Verify:** Clean build on both platforms, all tests pass, git clean.
+5. **Verify:** Clean build on both platforms, all tests pass, git clean. GitHub Actions APK artifact downloads and installs on a physical Android device.
 
 ---
 
