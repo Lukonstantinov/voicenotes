@@ -76,6 +76,8 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     private val yinCMND       = FloatArray(ANALYSIS_SIZE / 2)
     private val medianBuf     = FloatArray(MEDIAN_WINDOW)
     private val captureChunk  = FloatArray(CAPTURE_SIZE)
+    private val shortChunk    = ShortArray(CAPTURE_SIZE)   // used when PCM_FLOAT unavailable
+    private var using16bit    = false
 
     private var ringWritePos  = 0
     private var samplesInRing = 0
@@ -145,37 +147,61 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
             .getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)
             ?.toIntOrNull() ?: 48000
 
-        val minBuf = AudioRecord.getMinBufferSize(
+        val minBufFloat = AudioRecord.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_FLOAT)
+        val bufSizeFloat = maxOf(minBufFloat, CAPTURE_SIZE * 4)
 
-        val bufSize = maxOf(minBuf, CAPTURE_SIZE * 4)
-
+        // Attempt 1: UNPROCESSED + float
         val ar = AudioRecord(
             MediaRecorder.AudioSource.UNPROCESSED,
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_FLOAT,
-            bufSize)
+            bufSizeFloat)
 
-        if (ar.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "AudioRecord init failed, retrying with VOICE_RECOGNITION source")
+        if (ar.state == AudioRecord.STATE_INITIALIZED) {
+            audioRecord = ar
+        } else {
             ar.release()
+            Log.w(TAG, "UNPROCESSED+FLOAT failed, trying VOICE_RECOGNITION+FLOAT")
+
+            // Attempt 2: VOICE_RECOGNITION + float
             val ar2 = AudioRecord(
                 MediaRecorder.AudioSource.VOICE_RECOGNITION,
                 sampleRate,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_FLOAT,
-                bufSize)
-            if (ar2.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord fallback also failed")
+                bufSizeFloat)
+
+            if (ar2.state == AudioRecord.STATE_INITIALIZED) {
+                audioRecord = ar2
+            } else {
                 ar2.release()
-                return
+                Log.w(TAG, "VOICE_RECOGNITION+FLOAT failed, falling back to 16-bit PCM")
+
+                // Attempt 3: VOICE_RECOGNITION + 16-bit (universally supported)
+                val minBuf16 = AudioRecord.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT)
+                val ar3 = AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    maxOf(minBuf16, CAPTURE_SIZE * 2))
+
+                if (ar3.state != AudioRecord.STATE_INITIALIZED) {
+                    Log.e(TAG, "All AudioRecord init attempts failed")
+                    ar3.release()
+                    return
+                }
+                audioRecord = ar3
+                using16bit = true
+                Log.d(TAG, "Using 16-bit PCM fallback")
             }
-            audioRecord = ar2
-        } else {
-            audioRecord = ar
         }
 
         resetDSP()
@@ -183,15 +209,27 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
         audioRecord!!.startRecording()
 
         captureThread = Thread({
-            val buf = captureChunk
-            while (running.get()) {
-                val read = audioRecord?.read(buf, 0, CAPTURE_SIZE,
-                    AudioRecord.READ_BLOCKING) ?: break
-                if (read > 0) processChunk(buf, read)
+            if (using16bit) {
+                val shortBuf = shortChunk
+                val floatBuf = captureChunk
+                while (running.get()) {
+                    val read = audioRecord?.read(shortBuf, 0, CAPTURE_SIZE) ?: break
+                    if (read > 0) {
+                        for (i in 0 until read) floatBuf[i] = shortBuf[i] / 32768f
+                        processChunk(floatBuf, read)
+                    }
+                }
+            } else {
+                val buf = captureChunk
+                while (running.get()) {
+                    val read = audioRecord?.read(buf, 0, CAPTURE_SIZE,
+                        AudioRecord.READ_BLOCKING) ?: break
+                    if (read > 0) processChunk(buf, read)
+                }
             }
         }, "audio-capture").apply { isDaemon = true; start() }
 
-        Log.d(TAG, "Capture started at $sampleRate Hz")
+        Log.d(TAG, "Capture started at $sampleRate Hz, 16-bit=$using16bit")
     }
 
     private fun stop() {
@@ -217,6 +255,7 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
         isShowingPitch   = false
         prevFrequency    = 0f
         octaveHoldCount  = 0
+        using16bit       = false
     }
 
     // ─────────────────────────────────────────────────────────
