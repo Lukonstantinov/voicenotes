@@ -17,4 +17,8 @@ All source lives in `musicians-scratchpad/`.
 ## Current status
 - Phase 0 ✓ (Expo + New Architecture + prebuild + permissions)
 - Phase 1 ✓ (pitchUtils.ts + permissions.ts + 9 unit tests passing)
-- Phase 2 next: iOS native audio module (Swift + YIN + TurboModule)
+- Phase 2 ✓ (iOS native audio module — AVAudioEngine + YIN + signal conditioning + TurboModule)
+- Phase 3 ✓ (Android native audio module — AudioRecord + YIN + signal conditioning + TurboModule)
+- Phase 4 ✓ (React UI — PitchDisplay, CentIndicator, ListenButton, AppStatusBar, usePitchPolling)
+- Phase 5 ✓ (lifecycle management, error states, interruption handling, 3s silence hint, null-pitch clear)
+- Phase 6 ✓ (9/9 unit tests pass, tsc clean, no console.logs, git clean)
