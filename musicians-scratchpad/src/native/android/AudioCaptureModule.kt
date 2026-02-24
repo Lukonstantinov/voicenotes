@@ -103,6 +103,16 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     private val stateLock = Any()
     @Volatile private var latestState = PitchState()
 
+    // Audio focus handling — pause on phone calls, resume after
+    private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                if (running.get()) stop()
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────
     // JS API
     // ─────────────────────────────────────────────────────────
@@ -110,12 +120,14 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     @ReactMethod
     fun startListening() {
         if (running.get()) return
+        requestAudioFocus()
         setupAndStart()
     }
 
     @ReactMethod
     fun stopListening() {
         stop()
+        abandonAudioFocus()
     }
 
     /**
@@ -355,6 +367,24 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     // ─────────────────────────────────────────────────────────
     // Audio capture
     // ─────────────────────────────────────────────────────────
+
+    @Suppress("DEPRECATION")
+    private fun requestAudioFocus() {
+        val audioManager = reactContext.getSystemService(android.content.Context.AUDIO_SERVICE)
+                as AudioManager
+        audioManager.requestAudioFocus(
+            audioFocusListener,
+            AudioManager.STREAM_MUSIC,
+            AudioManager.AUDIOFOCUS_GAIN
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun abandonAudioFocus() {
+        val audioManager = reactContext.getSystemService(android.content.Context.AUDIO_SERVICE)
+                as AudioManager
+        audioManager.abandonAudioFocus(audioFocusListener)
+    }
 
     private fun setupAndStart() {
         val audioManager = reactContext.getSystemService(android.content.Context.AUDIO_SERVICE)
