@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity } from 'react-native';
+import { useTheme } from '../theme/ThemeContext';
 
 interface Props {
   isListening: boolean;
@@ -8,11 +9,15 @@ interface Props {
 }
 
 export function ListenButton({ isListening, onPress, disabled }: Props) {
+  const { colors } = useTheme();
+
   return (
     <TouchableOpacity
       style={[
         styles.button,
-        isListening ? styles.buttonActive : styles.buttonIdle,
+        isListening
+          ? styles.buttonActive
+          : { backgroundColor: colors.surface, borderColor: colors.text },
         disabled && styles.buttonDisabled,
       ]}
       onPress={onPress}
@@ -20,7 +25,7 @@ export function ListenButton({ isListening, onPress, disabled }: Props) {
       accessibilityRole="button"
       accessibilityLabel={isListening ? 'Stop listening' : 'Start listening'}
     >
-      <Text style={[styles.label, isListening && styles.labelActive]}>
+      <Text style={[styles.label, { color: colors.text }, isListening && styles.labelActive]}>
         {isListening ? 'Stop' : 'Listen'}
       </Text>
     </TouchableOpacity>
@@ -37,10 +42,6 @@ const styles = StyleSheet.create({
     marginTop: 32,
     borderWidth: 3,
   },
-  buttonIdle: {
-    backgroundColor: '#fff',
-    borderColor: '#1a1a2e',
-  },
   buttonActive: {
     backgroundColor: '#e74c3c',
     borderColor: '#c0392b',
@@ -51,7 +52,6 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1a1a2e',
   },
   labelActive: {
     color: '#fff',

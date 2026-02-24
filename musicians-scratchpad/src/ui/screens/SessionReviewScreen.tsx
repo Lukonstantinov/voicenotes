@@ -13,6 +13,7 @@ import { analyzeSession } from '../../utils/sessionAnalysis';
 import { saveSession } from '../../utils/sessionStorage';
 import { translateNote } from '../../utils/notationSystems';
 import { PianoRollTimeline } from '../components/PianoRollTimeline';
+import { useTheme } from '../theme/ThemeContext';
 
 const COMMON_KEYS = [
   'C major', 'G major', 'D major', 'A major', 'E major', 'B major',
@@ -28,6 +29,7 @@ interface Props {
 }
 
 export function SessionReviewScreen({ session: initialSession, onBack, notation }: Props) {
+  const { colors } = useTheme();
   const [session, setSession] = useState(initialSession);
   const [showCorrected, setShowCorrected] = useState(false);
   const [bpmInput, setBpmInput] = useState(session.bpm?.toString() ?? '');
@@ -65,19 +67,19 @@ export function SessionReviewScreen({ session: initialSession, onBack, notation 
   const hasCorrected = session.correctedNotes != null;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backText}>Back</Text>
+          <Text style={[styles.backText, { color: colors.accent }]}>Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title} numberOfLines={1}>{session.name}</Text>
+        <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{session.name}</Text>
         <View style={{ width: 50 }} />
       </View>
 
       {/* Session info */}
       <View style={styles.info}>
-        <Text style={styles.infoText}>
+        <Text style={[styles.infoText, { color: colors.textMuted }]}>
           {session.notes.length} notes | {formatDuration(session.durationMs)}
         </Text>
       </View>
@@ -95,8 +97,8 @@ export function SessionReviewScreen({ session: initialSession, onBack, notation 
 
       {/* Toggle corrected/original */}
       {hasCorrected && (
-        <TouchableOpacity style={styles.toggleBtn} onPress={toggleView}>
-          <Text style={styles.toggleText}>
+        <TouchableOpacity style={[styles.toggleBtn, { backgroundColor: colors.text }]} onPress={toggleView}>
+          <Text style={[styles.toggleText, { color: colors.background }]}>
             {showCorrected ? 'Show Original' : 'Show Corrected'}
           </Text>
         </TouchableOpacity>
@@ -104,32 +106,32 @@ export function SessionReviewScreen({ session: initialSession, onBack, notation 
 
       {/* Correction controls */}
       <ScrollView style={styles.controls} contentContainerStyle={styles.controlsContent}>
-        <Text style={styles.sectionTitle}>Correction Settings</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Correction Settings</Text>
 
         {/* BPM */}
         <View style={styles.row}>
-          <Text style={styles.label}>BPM:</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>BPM:</Text>
           <TextInput
-            style={styles.bpmInput}
+            style={[styles.bpmInput, { borderColor: colors.border, color: colors.text }]}
             value={bpmInput}
             onChangeText={setBpmInput}
             keyboardType="numeric"
             placeholder="120"
-            placeholderTextColor="#aaa"
+            placeholderTextColor={colors.textPlaceholder}
           />
         </View>
 
         {/* Key selector */}
-        <Text style={styles.label}>Key:</Text>
+        <Text style={[styles.label, { color: colors.textSecondary }]}>Key:</Text>
         <View style={styles.keyGrid}>
           {COMMON_KEYS.map((k) => (
             <TouchableOpacity
               key={k}
-              style={[styles.keyChip, selectedKey === k && styles.keyChipActive]}
+              style={[styles.keyChip, { backgroundColor: colors.surface }, selectedKey === k && { backgroundColor: colors.text }]}
               onPress={() => setSelectedKey(k)}
             >
               <Text
-                style={[styles.keyChipText, selectedKey === k && styles.keyChipTextActive]}
+                style={[styles.keyChipText, { color: colors.textSecondary }, selectedKey === k && { color: colors.background, fontWeight: '600' }]}
               >
                 {k}
               </Text>
@@ -149,18 +151,18 @@ export function SessionReviewScreen({ session: initialSession, onBack, notation 
         </TouchableOpacity>
 
         {/* Note list */}
-        <Text style={styles.sectionTitle}>Note List</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Note List</Text>
         {(showCorrected && session.correctedNotes ? session.correctedNotes : session.notes).map(
           (note, i) => (
-            <View key={note.id} style={styles.noteRow}>
-              <Text style={styles.noteIndex}>{i + 1}</Text>
-              <Text style={styles.noteLabel}>
+            <View key={note.id} style={[styles.noteRow, { borderBottomColor: colors.borderLight }]}>
+              <Text style={[styles.noteIndex, { color: colors.textPlaceholder }]}>{i + 1}</Text>
+              <Text style={[styles.noteLabel, { color: colors.text }]}>
                 {translateNote(note.noteName, notation)}{note.octave}
               </Text>
-              <Text style={styles.noteDuration}>
+              <Text style={[styles.noteDuration, { color: colors.textSecondary }]}>
                 {((note.endMs - note.startMs) / 1000).toFixed(2)}s
               </Text>
-              <Text style={styles.noteTime}>
+              <Text style={[styles.noteTime, { color: colors.textMuted }]}>
                 @{(note.startMs / 1000).toFixed(1)}s
               </Text>
             </View>
@@ -181,7 +183,6 @@ function formatDuration(ms: number): string {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f9f9f9',
   },
   header: {
     flexDirection: 'row',
@@ -193,14 +194,12 @@ const styles = StyleSheet.create({
   },
   backText: {
     fontSize: 15,
-    color: '#3498db',
     fontWeight: '500',
     width: 50,
   },
   title: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#1a1a2e',
     flex: 1,
     textAlign: 'center',
   },
@@ -210,7 +209,6 @@ const styles = StyleSheet.create({
   },
   infoText: {
     fontSize: 13,
-    color: '#888',
   },
   timeline: {
     height: 200,
@@ -222,11 +220,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 8,
     borderRadius: 16,
-    backgroundColor: '#1a1a2e',
     marginVertical: 6,
   },
   toggleText: {
-    color: '#fff',
     fontSize: 13,
     fontWeight: '600',
   },
@@ -240,7 +236,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#1a1a2e',
     marginTop: 12,
     marginBottom: 6,
   },
@@ -251,19 +246,16 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 14,
-    color: '#555',
     marginRight: 8,
     marginBottom: 4,
   },
   bpmInput: {
     borderWidth: 1,
-    borderColor: '#ccc',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
     fontSize: 16,
     width: 80,
-    color: '#1a1a2e',
   },
   keyGrid: {
     flexDirection: 'row',
@@ -275,18 +267,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 12,
-    backgroundColor: '#eee',
-  },
-  keyChipActive: {
-    backgroundColor: '#1a1a2e',
   },
   keyChipText: {
     fontSize: 12,
-    color: '#555',
-  },
-  keyChipTextActive: {
-    color: '#fff',
-    fontWeight: '600',
   },
   correctBtn: {
     alignSelf: 'center',
@@ -309,29 +292,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eee',
   },
   noteIndex: {
     width: 28,
     fontSize: 12,
-    color: '#aaa',
   },
   noteLabel: {
     flex: 1,
     fontSize: 14,
     fontWeight: '600',
-    color: '#1a1a2e',
   },
   noteDuration: {
     width: 60,
     fontSize: 12,
-    color: '#666',
     textAlign: 'right',
   },
   noteTime: {
     width: 60,
     fontSize: 12,
-    color: '#999',
     textAlign: 'right',
   },
 });

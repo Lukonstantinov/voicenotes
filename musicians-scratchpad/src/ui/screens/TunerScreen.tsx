@@ -27,6 +27,7 @@ import { getNoteColor } from '../../utils/noteColors';
 import { pitchFramesToNotes } from '../../utils/pitchFrameToNotes';
 import { saveSession } from '../../utils/sessionStorage';
 import { uid } from '../../utils/uid';
+import { useTheme } from '../theme/ThemeContext';
 
 const SILENCE_HINT_DELAY_MS = 3000;
 
@@ -57,6 +58,7 @@ interface Props {
 }
 
 export function TunerScreen({ onStartRecording, onImportSession, notation }: Props) {
+  const { colors } = useTheme();
   const [audioState, setAudioState] = useState<AudioAppState>('idle');
   const [isImporting, setIsImporting] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -168,16 +170,16 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
 
   // Translate note display
   const displayNote = pitch ? translateNote(pitch.noteName, notation) : null;
-  const noteColor = pitch ? getNoteColor(pitch.noteName) : '#1a1a2e';
+  const noteColor = pitch ? getNoteColor(pitch.noteName) : colors.text;
 
   return (
     <View style={styles.body}>
       {isListening && (
         <TouchableOpacity
-          style={[styles.holdButton, isHeld && styles.holdButtonActive]}
+          style={[styles.holdButton, { borderColor: colors.text }, isHeld && { backgroundColor: colors.text }]}
           onPress={() => setIsHeld(prev => !prev)}
         >
-          <Text style={[styles.holdLabel, isHeld && styles.holdLabelActive]}>
+          <Text style={[styles.holdLabel, { color: colors.text }, isHeld && { color: colors.background }]}>
             {isHeld ? 'RESUME' : 'HOLD'}
           </Text>
         </TouchableOpacity>
@@ -185,7 +187,7 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
       {displayNote && pitch ? (
         <View style={styles.noteContainer}>
           <Text style={[styles.noteName, { color: noteColor }]}>{displayNote}</Text>
-          <Text style={styles.octave}>{pitch.octave}</Text>
+          <Text style={[styles.octave, { color: colors.textSecondary }]}>{pitch.octave}</Text>
         </View>
       ) : (
         <PitchDisplay pitch={null} />
@@ -196,18 +198,18 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
         onPress={handleButtonPress}
         disabled={audioState === 'requesting'}
       />
-      <TouchableOpacity style={styles.recordButton} onPress={onStartRecording}>
-        <Text style={styles.recordLabel}>Record Session</Text>
+      <TouchableOpacity style={[styles.recordButton, { backgroundColor: colors.text }]} onPress={onStartRecording}>
+        <Text style={[styles.recordLabel, { color: colors.background }]}>Record Session</Text>
       </TouchableOpacity>
       <TouchableOpacity
-        style={[styles.importButton, isImporting && styles.importButtonDisabled]}
+        style={[styles.importButton, { borderColor: colors.text }, isImporting && styles.importButtonDisabled]}
         onPress={handleImportAudio}
         disabled={isImporting}
       >
         {isImporting ? (
-          <ActivityIndicator size="small" color="#fff" />
+          <ActivityIndicator size="small" color={colors.text} />
         ) : (
-          <Text style={styles.importLabel}>Import Audio File</Text>
+          <Text style={[styles.importLabel, { color: colors.text }]}>Import Audio File</Text>
         )}
       </TouchableOpacity>
       <AppStatusBar appState={audioState} showHint={showHint} />
@@ -229,21 +231,13 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
     borderWidth: 2,
-    borderColor: '#1a1a2e',
     backgroundColor: 'transparent',
     zIndex: 10,
-  },
-  holdButtonActive: {
-    backgroundColor: '#1a1a2e',
   },
   holdLabel: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#1a1a2e',
     letterSpacing: 1,
-  },
-  holdLabelActive: {
-    color: '#fff',
   },
   noteContainer: {
     alignItems: 'center',
@@ -253,13 +247,11 @@ const styles = StyleSheet.create({
   noteName: {
     fontSize: 120,
     fontWeight: '700',
-    color: '#1a1a2e',
     lineHeight: 130,
   },
   octave: {
     fontSize: 48,
     fontWeight: '400',
-    color: '#555',
     alignSelf: 'flex-end',
     marginBottom: 16,
     marginLeft: 4,
@@ -269,10 +261,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 10,
     borderRadius: 20,
-    backgroundColor: '#1a1a2e',
   },
   recordLabel: {
-    color: '#fff',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -282,7 +272,6 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#1a1a2e',
     minWidth: 160,
     alignItems: 'center',
   },
@@ -290,7 +279,6 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   importLabel: {
-    color: '#1a1a2e',
     fontSize: 14,
     fontWeight: '600',
   },

@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { RecordedNote, CorrectedNote, NotationPreset } from '../../utils/sessionTypes';
 import { translateNote, ENGLISH_PRESET } from '../../utils/notationSystems';
 import { getNoteColor } from '../../utils/noteColors';
+import { useTheme } from '../theme/ThemeContext';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ export function PianoRollTimeline({
   isRecording = false,
   notation = ENGLISH_PRESET,
 }: Props) {
+  const { colors } = useTheme();
   const scrollRef = useRef<ScrollView>(null);
 
   // Auto-scroll to right during recording
@@ -87,14 +89,14 @@ export function PianoRollTimeline({
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { borderColor: colors.border, backgroundColor: colors.surface }]}>
       {/* Row labels (pitch axis) */}
-      <View style={styles.labels}>
+      <View style={[styles.labels, { backgroundColor: colors.surfaceAlt, borderRightColor: colors.border }]}>
         {Array.from({ length: rowCount }, (_, i) => {
           const midi = maxMidi - i;
           return (
-            <View key={midi} style={[styles.labelRow, { height: ROW_HEIGHT }]}>
-              <Text style={styles.labelText} numberOfLines={1}>
+            <View key={midi} style={[styles.labelRow, { height: ROW_HEIGHT, borderBottomColor: colors.borderLight }]}>
+              <Text style={[styles.labelText, { color: colors.textMuted }]} numberOfLines={1}>
                 {midiToLabel(midi, notation)}
               </Text>
             </View>
@@ -123,7 +125,8 @@ export function PianoRollTimeline({
                   top: i * ROW_HEIGHT,
                   height: ROW_HEIGHT,
                   width: totalWidth,
-                  backgroundColor: isBlack ? '#e8e8ee' : '#f5f5fa',
+                  backgroundColor: isBlack ? colors.gridBlackKey : colors.gridWhiteKey,
+                  borderBottomColor: colors.borderLight,
                 },
               ]}
             />
@@ -134,9 +137,9 @@ export function PianoRollTimeline({
         {timeMarkers.map((s) => (
           <View
             key={`t-${s}`}
-            style={[styles.timeLine, { left: s * PIXELS_PER_SECOND }]}
+            style={[styles.timeLine, { left: s * PIXELS_PER_SECOND, backgroundColor: colors.border }]}
           >
-            <Text style={styles.timeText}>{s}s</Text>
+            <Text style={[styles.timeText, { color: colors.textMuted }]}>{s}s</Text>
           </View>
         ))}
 
@@ -193,26 +196,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ddd',
     borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: '#fafafa',
   },
   labels: {
     width: NOTE_LABEL_WIDTH,
-    backgroundColor: '#f0f0f5',
     borderRightWidth: 1,
-    borderRightColor: '#ddd',
   },
   labelRow: {
     justifyContent: 'center',
     paddingHorizontal: 2,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
   },
   labelText: {
     fontSize: 9,
-    color: '#666',
     textAlign: 'right',
   },
   scroll: {
@@ -225,21 +222,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
   },
   timeLine: {
     position: 'absolute',
     top: 0,
     bottom: 0,
     width: 1,
-    backgroundColor: '#ccc',
   },
   timeText: {
     position: 'absolute',
     top: 2,
     left: 2,
     fontSize: 8,
-    color: '#999',
   },
   noteBlock: {
     position: 'absolute',
