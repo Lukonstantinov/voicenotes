@@ -62,6 +62,9 @@ class AudioCaptureModule: NSObject {
   private var dynConfEnter: Float  = kConfidenceEnter
   private var dynConfExit: Float   = kConfidenceExit
 
+  // Runtime-tunable A4 reference (updated via setA4Calibration, read on audio thread)
+  private var dynA4: Double = 440.0
+
   // Atomic state (guarded by stateLock)
   private var stateLock   = pthread_mutex_t()
   private var latestState = PitchState()
@@ -125,6 +128,11 @@ class AudioCaptureModule: NSObject {
     dynSilenceDb = Float(silenceDb)
     dynConfEnter = Float(confidenceEnter)
     dynConfExit  = Float(confidenceExit)
+  }
+
+  /// Update the A4 reference frequency used for note name / cents calculation.
+  @objc func setA4Calibration(_ hz: Double) {
+    dynA4 = hz
   }
 
   /// Offline pitch analysis of a local audio file.
@@ -568,9 +576,10 @@ class AudioCaptureModule: NSObject {
 
   private func frequencyToNote(_ freq: Float) -> NoteInfo? {
     guard freq > 20, freq <= 5000 else { return nil }
-    let noteNum     = Double(12) * log2(Double(freq) / 440.0) + 69
+    let a4          = dynA4
+    let noteNum     = Double(12) * log2(Double(freq) / a4) + 69
     let midiNearest = Int(noteNum.rounded())
-    let nearFreq    = 440.0 * pow(2.0, Double(midiNearest - 69) / 12.0)
+    let nearFreq    = a4 * pow(2.0, Double(midiNearest - 69) / 12.0)
     let cents       = Int((1200.0 * log2(Double(freq) / nearFreq)).rounded())
     let noteIdx     = ((midiNearest % 12) + 12) % 12
     let noteName    = kNoteNames[noteIdx]

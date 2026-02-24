@@ -91,6 +91,14 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     private var prevFrequency    = 0f
     private var octaveHoldCount  = 0
 
+    // Runtime-tunable sensitivity (updated via setSensitivity, read on capture thread)
+    @Volatile private var dynSilenceDb  = RMS_SILENCE_DB
+    @Volatile private var dynConfEnter  = CONFIDENCE_ENTER
+    @Volatile private var dynConfExit   = CONFIDENCE_EXIT
+
+    // Runtime-tunable A4 reference (updated via setA4Calibration, read on capture thread)
+    @Volatile private var dynA4 = 440.0
+
     // Atomic state (guarded by stateLock)
     private val stateLock = Any()
     @Volatile private var latestState = PitchState()
@@ -136,6 +144,20 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
             putDouble("confidence", state.confidence.toDouble())
             putDouble("timestamp",  state.timestamp)
         }
+    }
+
+    /** Update the three runtime-tunable sensitivity constants. */
+    @ReactMethod
+    fun setSensitivity(silenceDb: Double, confidenceEnter: Double, confidenceExit: Double) {
+        dynSilenceDb = silenceDb.toFloat()
+        dynConfEnter = confidenceEnter.toFloat()
+        dynConfExit  = confidenceExit.toFloat()
+    }
+
+    /** Update the A4 reference frequency used for note name / cents calculation. */
+    @ReactMethod
+    fun setA4Calibration(hz: Double) {
+        dynA4 = hz
     }
 
     /** Offline pitch analysis of a local audio file. */
@@ -433,12 +455,17 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
             analysisWin[i] = ringBuffer[(ringWritePos + i) and (ANALYSIS_SIZE - 1)]
         }
 
+        // Snapshot sensitivity (written from JS thread; one-frame race is harmless)
+        val silenceDb = dynSilenceDb
+        val confEnter = dynConfEnter
+        val confExit  = dynConfExit
+
         // [1] RMS silence gate
         var sumSq = 0f
         for (v in analysisWin) sumSq += v * v
         val rms   = sqrt(sumSq / ANALYSIS_SIZE)
         val rmsDb = if (rms > 0f) 20f * log10(rms) else -200f
-        if (rmsDb < RMS_SILENCE_DB) { clearState(); return }
+        if (rmsDb < silenceDb) { clearState(); return }
 
         // [2] YIN
         val yinResult = yin() ?: run { clearState(); return }
@@ -446,9 +473,9 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
 
         // [3] Confidence hysteresis
         if (isShowingPitch) {
-            if (confidence < CONFIDENCE_EXIT)  { clearState(); return }
+            if (confidence < confExit)  { clearState(); return }
         } else {
-            if (confidence < CONFIDENCE_ENTER) return
+            if (confidence < confEnter) return
         }
 
         // [4] Octave jump suppression
@@ -608,9 +635,10 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
 
     private fun frequencyToNote(freq: Float): NoteInfo? {
         if (freq <= 20f || freq > 5000f) return null
-        val noteNum     = 12.0 * log2(freq.toDouble() / 440.0) + 69.0
+        val a4          = dynA4
+        val noteNum     = 12.0 * log2(freq.toDouble() / a4) + 69.0
         val midiNearest = round(noteNum).toInt()
-        val nearFreq    = 440.0 * 2.0.pow((midiNearest - 69).toDouble() / 12.0)
+        val nearFreq    = a4 * 2.0.pow((midiNearest - 69).toDouble() / 12.0)
         val cents       = round(1200.0 * log2(freq.toDouble() / nearFreq)).toInt()
         val noteIdx     = ((midiNearest % 12) + 12) % 12
         val noteName    = NOTE_NAMES[noteIdx]

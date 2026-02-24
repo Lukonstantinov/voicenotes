@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Session, NotationPreset } from '../../utils/sessionTypes';
-import { getActivePreset, getMicSensitivity, SENSITIVITY_CONFIGS } from '../../utils/settingsStorage';
+import { getActivePreset, getMicSensitivity, getA4Calibration, SENSITIVITY_CONFIGS } from '../../utils/settingsStorage';
 import AudioPitchModule from '../../bridge/NativeAudioPitchModule';
 import { ENGLISH_PRESET } from '../../utils/notationSystems';
 import { TunerScreen } from '../screens/TunerScreen';
@@ -30,11 +30,14 @@ export function AppNavigator() {
     getActivePreset().then(setNotation);
   }, [screen]);
 
-  // Apply saved mic sensitivity once on mount
+  // Apply saved settings once on mount
   useEffect(() => {
     getMicSensitivity().then((level) => {
       const cfg = SENSITIVITY_CONFIGS[level];
       AudioPitchModule.setSensitivity(cfg.silenceDb, cfg.confidenceEnter, cfg.confidenceExit);
+    });
+    getA4Calibration().then((hz) => {
+      AudioPitchModule.setA4Calibration(hz);
     });
   }, []);
 

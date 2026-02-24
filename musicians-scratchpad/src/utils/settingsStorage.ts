@@ -5,6 +5,7 @@ import { BUILT_IN_PRESETS, ENGLISH_PRESET } from './notationSystems';
 const ACTIVE_PRESET_KEY   = 'settings_active_notation';
 const CUSTOM_PRESETS_KEY  = 'settings_custom_presets';
 const MIC_SENSITIVITY_KEY = 'settings_mic_sensitivity';
+const A4_CALIBRATION_KEY  = 'settings_a4_calibration';
 
 // ── Mic Sensitivity ────────────────────────────────────────────────────────
 
@@ -43,6 +44,24 @@ export async function getMicSensitivity(): Promise<SensitivityLevel> {
 
 export async function setMicSensitivity(level: SensitivityLevel): Promise<void> {
   await AsyncStorage.setItem(MIC_SENSITIVITY_KEY, level);
+}
+
+// ── A4 Calibration ────────────────────────────────────────────────────────
+
+export const A4_DEFAULT = 440;
+export const A4_MIN = 430;
+export const A4_MAX = 450;
+
+export async function getA4Calibration(): Promise<number> {
+  const val = await AsyncStorage.getItem(A4_CALIBRATION_KEY);
+  if (val === null) return A4_DEFAULT;
+  const parsed = parseFloat(val);
+  if (isNaN(parsed) || parsed < A4_MIN || parsed > A4_MAX) return A4_DEFAULT;
+  return parsed;
+}
+
+export async function setA4Calibration(hz: number): Promise<void> {
+  await AsyncStorage.setItem(A4_CALIBRATION_KEY, String(hz));
 }
 
 /** Get the active notation preset (defaults to English). */

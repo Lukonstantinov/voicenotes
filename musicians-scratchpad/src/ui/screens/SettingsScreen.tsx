@@ -23,7 +23,12 @@ import {
   deleteCustomPreset,
   getMicSensitivity,
   setMicSensitivity,
+  getA4Calibration,
+  setA4Calibration as saveA4Calibration,
   SENSITIVITY_CONFIGS,
+  A4_DEFAULT,
+  A4_MIN,
+  A4_MAX,
 } from '../../utils/settingsStorage';
 import type { SensitivityLevel } from '../../utils/settingsStorage';
 import AudioPitchModule from '../../bridge/NativeAudioPitchModule';
@@ -38,6 +43,7 @@ export function SettingsScreen({ onBack }: Props) {
   const [activeId, setActiveId] = useState('english');
   const [editingPreset, setEditingPreset] = useState<NotationPreset | null>(null);
   const [sensitivity, setSensitivity] = useState<SensitivityLevel>('medium');
+  const [a4Hz, setA4Hz] = useState(A4_DEFAULT);
 
   const refresh = useCallback(async () => {
     const all = await getAllPresets();
@@ -49,6 +55,7 @@ export function SettingsScreen({ onBack }: Props) {
   useEffect(() => {
     refresh();
     getMicSensitivity().then(setSensitivity);
+    getA4Calibration().then(setA4Hz);
   }, [refresh]);
 
   const handleSensitivity = useCallback(async (level: SensitivityLevel) => {
@@ -56,6 +63,13 @@ export function SettingsScreen({ onBack }: Props) {
     await setMicSensitivity(level);
     const cfg = SENSITIVITY_CONFIGS[level];
     AudioPitchModule.setSensitivity(cfg.silenceDb, cfg.confidenceEnter, cfg.confidenceExit);
+  }, []);
+
+  const handleA4Change = useCallback(async (hz: number) => {
+    const clamped = Math.round(Math.max(A4_MIN, Math.min(A4_MAX, hz)));
+    setA4Hz(clamped);
+    await saveA4Calibration(clamped);
+    AudioPitchModule.setA4Calibration(clamped);
   }, []);
 
   const handleSelect = useCallback(async (id: string) => {
@@ -184,6 +198,32 @@ export function SettingsScreen({ onBack }: Props) {
         </View>
         <Text style={styles.sensitivityDesc}>
           {SENSITIVITY_CONFIGS[sensitivity].description}
+        </Text>
+
+        <Text style={styles.sectionTitle}>A4 Reference Pitch</Text>
+        <View style={styles.a4Row}>
+          <TouchableOpacity
+            style={styles.a4StepBtn}
+            onPress={() => handleA4Change(a4Hz - 1)}
+          >
+            <Text style={styles.a4StepLabel}>-</Text>
+          </TouchableOpacity>
+          <Text style={styles.a4Value}>{a4Hz} Hz</Text>
+          <TouchableOpacity
+            style={styles.a4StepBtn}
+            onPress={() => handleA4Change(a4Hz + 1)}
+          >
+            <Text style={styles.a4StepLabel}>+</Text>
+          </TouchableOpacity>
+        </View>
+        {a4Hz !== A4_DEFAULT && (
+          <TouchableOpacity onPress={() => handleA4Change(A4_DEFAULT)}>
+            <Text style={styles.a4Reset}>Reset to {A4_DEFAULT} Hz</Text>
+          </TouchableOpacity>
+        )}
+        <Text style={styles.sensitivityDesc}>
+          Standard concert pitch is 440 Hz. Baroque tuning often uses 415 Hz.
+          Range: {A4_MIN}–{A4_MAX} Hz.
         </Text>
 
         <Text style={styles.sectionTitle}>Notation System</Text>
@@ -415,5 +455,41 @@ const styles = StyleSheet.create({
     color: '#888',
     marginBottom: 16,
     lineHeight: 17,
+  },
+  // A4 calibration
+  a4Row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    marginBottom: 8,
+  },
+  a4StepBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#1a1a2e',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  a4StepLabel: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1a1a2e',
+  },
+  a4Value: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1a1a2e',
+    minWidth: 90,
+    textAlign: 'center',
+  },
+  a4Reset: {
+    fontSize: 13,
+    color: '#3498db',
+    fontWeight: '500',
+    textAlign: 'center',
+    marginBottom: 4,
   },
 });

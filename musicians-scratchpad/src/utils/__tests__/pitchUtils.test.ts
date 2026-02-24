@@ -72,4 +72,26 @@ describe('frequencyToNote', () => {
   it('returns null for negative frequency (-100 Hz)', () => {
     expect(frequencyToNote(-100)).toBeNull();
   });
+
+  it('returns A4 at 0 cents when a4=442 and freq=442', () => {
+    const result = frequencyToNote(442, 442);
+    expect(result).not.toBeNull();
+    expect(result!.noteName).toBe('A');
+    expect(result!.octave).toBe(4);
+    expect(result!.cents).toBe(0);
+  });
+
+  it('shows negative cents for 440 Hz when a4=442', () => {
+    const result = frequencyToNote(440, 442);
+    expect(result).not.toBeNull();
+    expect(result!.noteName).toBe('A');
+    expect(result!.octave).toBe(4);
+    expect(result!.cents).toBeLessThan(0);
+  });
+
+  it('uses default a4=440 when not specified', () => {
+    const withDefault = frequencyToNote(440);
+    const withExplicit = frequencyToNote(440, 440);
+    expect(withDefault).toEqual(withExplicit);
+  });
 });
