@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import type { Session, SessionSummary } from '../../utils/sessionTypes';
 import { listSessions, loadSession, deleteSession } from '../../utils/sessionStorage';
+import { useTheme } from '../theme/ThemeContext';
 
 interface Props {
   onSelect: (session: Session) => void;
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function SessionListScreen({ onSelect, onBack }: Props) {
+  const { colors } = useTheme();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -51,34 +53,34 @@ export function SessionListScreen({ onSelect, onBack }: Props) {
 
   const renderItem = useCallback(({ item }: { item: SessionSummary }) => (
     <TouchableOpacity
-      style={styles.item}
+      style={[styles.item, { borderBottomColor: colors.border }]}
       onPress={() => handleSelect(item.id)}
       onLongPress={() => handleDelete(item.id, item.name)}
     >
       <View style={styles.itemMain}>
-        <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
-        <Text style={styles.itemMeta}>
+        <Text style={[styles.itemName, { color: colors.text }]} numberOfLines={1}>{item.name}</Text>
+        <Text style={[styles.itemMeta, { color: colors.textMuted }]}>
           {item.noteCount} notes | {formatDuration(item.durationMs)}
         </Text>
       </View>
-      <Text style={styles.itemDate}>{formatDate(item.createdAt)}</Text>
+      <Text style={[styles.itemDate, { color: colors.textPlaceholder }]}>{formatDate(item.createdAt)}</Text>
     </TouchableOpacity>
-  ), [handleSelect, handleDelete]);
+  ), [handleSelect, handleDelete, colors]);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backText}>Back</Text>
+          <Text style={[styles.backText, { color: colors.accent }]}>Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Session History</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Session History</Text>
         <View style={{ width: 50 }} />
       </View>
 
       {sessions.length === 0 && !loading ? (
         <View style={styles.empty}>
-          <Text style={styles.emptyText}>No sessions yet.</Text>
-          <Text style={styles.emptyHint}>Record a session from the Tuner tab.</Text>
+          <Text style={[styles.emptyText, { color: colors.textMuted }]}>No sessions yet.</Text>
+          <Text style={[styles.emptyHint, { color: colors.textPlaceholder }]}>Record a session from the Tuner tab.</Text>
         </View>
       ) : (
         <FlatList
@@ -109,7 +111,6 @@ function formatDate(epoch: number): string {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f9f9f9',
   },
   header: {
     flexDirection: 'row',
@@ -121,14 +122,12 @@ const styles = StyleSheet.create({
   },
   backText: {
     fontSize: 15,
-    color: '#3498db',
     fontWeight: '500',
     width: 50,
   },
   title: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#1a1a2e',
   },
   list: {
     paddingHorizontal: 16,
@@ -138,7 +137,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ddd',
   },
   itemMain: {
     flex: 1,
@@ -146,16 +144,13 @@ const styles = StyleSheet.create({
   itemName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#1a1a2e',
   },
   itemMeta: {
     fontSize: 12,
-    color: '#888',
     marginTop: 2,
   },
   itemDate: {
     fontSize: 12,
-    color: '#aaa',
     marginLeft: 8,
   },
   empty: {
@@ -165,11 +160,9 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
-    color: '#888',
   },
   emptyHint: {
     fontSize: 13,
-    color: '#aaa',
     marginTop: 4,
   },
 });

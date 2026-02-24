@@ -2,9 +2,10 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Session, NotationPreset } from '../../utils/sessionTypes';
-import { getActivePreset, getMicSensitivity, SENSITIVITY_CONFIGS } from '../../utils/settingsStorage';
+import { getActivePreset, getMicSensitivity, getA4Calibration, SENSITIVITY_CONFIGS } from '../../utils/settingsStorage';
 import AudioPitchModule from '../../bridge/NativeAudioPitchModule';
 import { ENGLISH_PRESET } from '../../utils/notationSystems';
+import { useTheme } from '../theme/ThemeContext';
 import { TunerScreen } from '../screens/TunerScreen';
 import { RecordingScreen } from '../screens/RecordingScreen';
 import { SessionReviewScreen } from '../screens/SessionReviewScreen';
@@ -21,6 +22,7 @@ export type Screen =
 type TabId = 'tuner' | 'history' | 'settings';
 
 export function AppNavigator() {
+  const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [screen, setScreen] = useState<Screen>({ name: 'tuner' });
   const [notation, setNotation] = useState<NotationPreset>(ENGLISH_PRESET);
@@ -30,11 +32,14 @@ export function AppNavigator() {
     getActivePreset().then(setNotation);
   }, [screen]);
 
-  // Apply saved mic sensitivity once on mount
+  // Apply saved settings once on mount
   useEffect(() => {
     getMicSensitivity().then((level) => {
       const cfg = SENSITIVITY_CONFIGS[level];
       AudioPitchModule.setSensitivity(cfg.silenceDb, cfg.confidenceEnter, cfg.confidenceExit);
+    });
+    getA4Calibration().then((hz) => {
+      AudioPitchModule.setA4Calibration(hz);
     });
   }, []);
 
@@ -88,21 +93,27 @@ export function AppNavigator() {
   return (
     <View style={styles.container}>
       <View style={[styles.body, { paddingTop: insets.top }]}>{renderScreen()}</View>
-      <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+      <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 8), backgroundColor: colors.tabBar, borderTopColor: colors.tabBarBorder }]}>
         <TabButton
           label="Tuner"
           active={activeTab === 'tuner'}
           onPress={goToTuner}
+          activeColor={colors.text}
+          inactiveColor={colors.tabInactive}
         />
         <TabButton
           label="History"
           active={activeTab === 'history'}
           onPress={goToHistory}
+          activeColor={colors.text}
+          inactiveColor={colors.tabInactive}
         />
         <TabButton
           label="Settings"
           active={activeTab === 'settings'}
           onPress={goToSettings}
+          activeColor={colors.text}
+          inactiveColor={colors.tabInactive}
         />
       </View>
     </View>
@@ -113,14 +124,20 @@ function TabButton({
   label,
   active,
   onPress,
+  activeColor,
+  inactiveColor,
 }: {
   label: string;
   active: boolean;
   onPress: () => void;
+  activeColor: string;
+  inactiveColor: string;
 }) {
   return (
     <TouchableOpacity style={styles.tab} onPress={onPress}>
-      <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{label}</Text>
+      <Text style={[styles.tabLabel, { color: active ? activeColor : inactiveColor, fontWeight: active ? '700' : '500' }]}>
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -135,8 +152,6 @@ const styles = StyleSheet.create({
   tabBar: {
     flexDirection: 'row',
     borderTopWidth: 1,
-    borderTopColor: '#ddd',
-    backgroundColor: '#fafafa',
   },
   tab: {
     flex: 1,
@@ -145,11 +160,5 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     fontSize: 13,
-    color: '#888',
-    fontWeight: '500',
-  },
-  tabLabelActive: {
-    color: '#1a1a2e',
-    fontWeight: '700',
   },
 });

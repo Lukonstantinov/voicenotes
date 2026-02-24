@@ -23,21 +23,29 @@ import {
   deleteCustomPreset,
   getMicSensitivity,
   setMicSensitivity,
+  getA4Calibration,
+  setA4Calibration as saveA4Calibration,
   SENSITIVITY_CONFIGS,
+  A4_DEFAULT,
+  A4_MIN,
+  A4_MAX,
 } from '../../utils/settingsStorage';
 import type { SensitivityLevel } from '../../utils/settingsStorage';
 import AudioPitchModule from '../../bridge/NativeAudioPitchModule';
 import { uid } from '../../utils/uid';
+import { useTheme } from '../theme/ThemeContext';
 
 interface Props {
   onBack: () => void;
 }
 
 export function SettingsScreen({ onBack }: Props) {
+  const { colors } = useTheme();
   const [presets, setPresets] = useState<NotationPreset[]>(BUILT_IN_PRESETS);
   const [activeId, setActiveId] = useState('english');
   const [editingPreset, setEditingPreset] = useState<NotationPreset | null>(null);
   const [sensitivity, setSensitivity] = useState<SensitivityLevel>('medium');
+  const [a4Hz, setA4Hz] = useState(A4_DEFAULT);
 
   const refresh = useCallback(async () => {
     const all = await getAllPresets();
@@ -49,6 +57,7 @@ export function SettingsScreen({ onBack }: Props) {
   useEffect(() => {
     refresh();
     getMicSensitivity().then(setSensitivity);
+    getA4Calibration().then(setA4Hz);
   }, [refresh]);
 
   const handleSensitivity = useCallback(async (level: SensitivityLevel) => {
@@ -56,6 +65,13 @@ export function SettingsScreen({ onBack }: Props) {
     await setMicSensitivity(level);
     const cfg = SENSITIVITY_CONFIGS[level];
     AudioPitchModule.setSensitivity(cfg.silenceDb, cfg.confidenceEnter, cfg.confidenceExit);
+  }, []);
+
+  const handleA4Change = useCallback(async (hz: number) => {
+    const clamped = Math.round(Math.max(A4_MIN, Math.min(A4_MAX, hz)));
+    setA4Hz(clamped);
+    await saveA4Calibration(clamped);
+    AudioPitchModule.setA4Calibration(clamped);
   }, []);
 
   const handleSelect = useCallback(async (id: string) => {
@@ -112,38 +128,38 @@ export function SettingsScreen({ onBack }: Props) {
   // ── Editor mode ────────────────────────────────────────────────────────────
   if (editingPreset) {
     return (
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => setEditingPreset(null)}>
-            <Text style={styles.cancelText}>Cancel</Text>
+            <Text style={[styles.cancelText, { color: colors.accentDanger }]}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Edit Notation</Text>
+          <Text style={[styles.title, { color: colors.text }]}>Edit Notation</Text>
           <TouchableOpacity onPress={handleSaveEdit}>
-            <Text style={styles.saveText}>Save</Text>
+            <Text style={[styles.saveText, { color: colors.accentSuccess }]}>Save</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.nameRow}>
-          <Text style={styles.label}>Name:</Text>
+          <Text style={[styles.label, { color: colors.textSecondary }]}>Name:</Text>
           <TextInput
-            style={styles.nameInput}
+            style={[styles.nameInput, { borderColor: colors.border, color: colors.text }]}
             value={editingPreset.name}
             onChangeText={updateEditName}
             placeholder="Preset name"
-            placeholderTextColor="#aaa"
+            placeholderTextColor={colors.textPlaceholder}
           />
         </View>
 
         <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
           {CHROMATIC_NOTES.map((note) => (
-            <View key={note} style={styles.noteEditRow}>
-              <Text style={styles.noteOriginal}>{note}</Text>
+            <View key={note} style={[styles.noteEditRow, { borderBottomColor: colors.borderLight }]}>
+              <Text style={[styles.noteOriginal, { color: colors.textMuted }]}>{note}</Text>
               <TextInput
-                style={styles.noteInput}
+                style={[styles.noteInput, { borderColor: colors.border, color: colors.text }]}
                 value={editingPreset.noteMap[note]}
                 onChangeText={(v) => updateEditNote(note, v)}
                 placeholder={note}
-                placeholderTextColor="#ccc"
+                placeholderTextColor={colors.textPlaceholder}
               />
             </View>
           ))}
@@ -154,17 +170,17 @@ export function SettingsScreen({ onBack }: Props) {
 
   // ── Preset list mode ──────────────────────────────────────────────────────
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backText}>Back</Text>
+          <Text style={[styles.backText, { color: colors.accent }]}>Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Notation Settings</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Notation Settings</Text>
         <View style={{ width: 50 }} />
       </View>
 
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-        <Text style={styles.sectionTitle}>Mic Sensitivity</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Mic Sensitivity</Text>
         <View style={styles.sensitivityRow}>
           {(['low', 'medium', 'high'] as SensitivityLevel[]).map((level) => {
             const cfg = SENSITIVITY_CONFIGS[level];
@@ -172,26 +188,60 @@ export function SettingsScreen({ onBack }: Props) {
             return (
               <TouchableOpacity
                 key={level}
-                style={[styles.sensitivityBtn, active && styles.sensitivityBtnActive]}
+                style={[
+                  styles.sensitivityBtn,
+                  { borderColor: colors.border, backgroundColor: colors.surface },
+                  active && { borderColor: colors.text, backgroundColor: colors.text },
+                ]}
                 onPress={() => handleSensitivity(level)}
               >
-                <Text style={[styles.sensitivityLabel, active && styles.sensitivityLabelActive]}>
+                <Text style={[styles.sensitivityLabel, { color: colors.textSecondary }, active && { color: colors.background }]}>
                   {cfg.label}
                 </Text>
               </TouchableOpacity>
             );
           })}
         </View>
-        <Text style={styles.sensitivityDesc}>
+        <Text style={[styles.sensitivityDesc, { color: colors.textMuted }]}>
           {SENSITIVITY_CONFIGS[sensitivity].description}
         </Text>
 
-        <Text style={styles.sectionTitle}>Notation System</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>A4 Reference Pitch</Text>
+        <View style={styles.a4Row}>
+          <TouchableOpacity
+            style={[styles.a4StepBtn, { borderColor: colors.text }]}
+            onPress={() => handleA4Change(a4Hz - 1)}
+          >
+            <Text style={[styles.a4StepLabel, { color: colors.text }]}>-</Text>
+          </TouchableOpacity>
+          <Text style={[styles.a4Value, { color: colors.text }]}>{a4Hz} Hz</Text>
+          <TouchableOpacity
+            style={[styles.a4StepBtn, { borderColor: colors.text }]}
+            onPress={() => handleA4Change(a4Hz + 1)}
+          >
+            <Text style={[styles.a4StepLabel, { color: colors.text }]}>+</Text>
+          </TouchableOpacity>
+        </View>
+        {a4Hz !== A4_DEFAULT && (
+          <TouchableOpacity onPress={() => handleA4Change(A4_DEFAULT)}>
+            <Text style={[styles.a4Reset, { color: colors.accent }]}>Reset to {A4_DEFAULT} Hz</Text>
+          </TouchableOpacity>
+        )}
+        <Text style={[styles.sensitivityDesc, { color: colors.textMuted }]}>
+          Standard concert pitch is 440 Hz. Baroque tuning often uses 415 Hz.
+          Range: {A4_MIN}–{A4_MAX} Hz.
+        </Text>
+
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Notation System</Text>
 
         {presets.map((preset) => (
           <TouchableOpacity
             key={preset.id}
-            style={[styles.presetItem, activeId === preset.id && styles.presetItemActive]}
+            style={[
+              styles.presetItem,
+              { backgroundColor: colors.surface, borderColor: colors.borderLight },
+              activeId === preset.id && { borderColor: colors.text, backgroundColor: colors.surfaceAlt },
+            ]}
             onPress={() => handleSelect(preset.id)}
             onLongPress={
               !preset.isBuiltIn
@@ -203,12 +253,13 @@ export function SettingsScreen({ onBack }: Props) {
               <Text
                 style={[
                   styles.presetName,
-                  activeId === preset.id && styles.presetNameActive,
+                  { color: colors.textSecondary },
+                  activeId === preset.id && { color: colors.text },
                 ]}
               >
                 {preset.name}
               </Text>
-              <Text style={styles.presetPreview}>
+              <Text style={[styles.presetPreview, { color: colors.textMuted }]}>
                 {CHROMATIC_NOTES.slice(0, 7)
                   .map((n) => preset.noteMap[n])
                   .join(' ')}
@@ -216,15 +267,15 @@ export function SettingsScreen({ onBack }: Props) {
             </View>
             {!preset.isBuiltIn && (
               <TouchableOpacity onPress={() => handleEditCustom(preset)}>
-                <Text style={styles.editText}>Edit</Text>
+                <Text style={[styles.editText, { color: colors.accent }]}>Edit</Text>
               </TouchableOpacity>
             )}
-            {activeId === preset.id && <Text style={styles.check}>✓</Text>}
+            {activeId === preset.id && <Text style={[styles.check, { color: colors.text }]}>✓</Text>}
           </TouchableOpacity>
         ))}
 
-        <TouchableOpacity style={styles.addBtn} onPress={handleCreateCustom}>
-          <Text style={styles.addBtnText}>+ Create Custom Notation</Text>
+        <TouchableOpacity style={[styles.addBtn, { borderColor: colors.border }]} onPress={handleCreateCustom}>
+          <Text style={[styles.addBtnText, { color: colors.accent }]}>+ Create Custom Notation</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -234,7 +285,6 @@ export function SettingsScreen({ onBack }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f9f9f9',
   },
   header: {
     flexDirection: 'row',
@@ -246,19 +296,16 @@ const styles = StyleSheet.create({
   },
   backText: {
     fontSize: 15,
-    color: '#3498db',
     fontWeight: '500',
     width: 50,
   },
   cancelText: {
     fontSize: 15,
-    color: '#e74c3c',
     fontWeight: '500',
     width: 50,
   },
   saveText: {
     fontSize: 15,
-    color: '#27ae60',
     fontWeight: '700',
     width: 50,
     textAlign: 'right',
@@ -266,7 +313,6 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#1a1a2e',
   },
   list: {
     flex: 1,
@@ -278,7 +324,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#1a1a2e',
     marginTop: 12,
     marginBottom: 8,
   },
@@ -288,14 +333,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 10,
-    backgroundColor: '#fff',
     marginBottom: 6,
     borderWidth: 1,
-    borderColor: '#eee',
-  },
-  presetItemActive: {
-    borderColor: '#1a1a2e',
-    backgroundColor: '#f0f0ff',
   },
   presetMain: {
     flex: 1,
@@ -303,25 +342,18 @@ const styles = StyleSheet.create({
   presetName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#333',
-  },
-  presetNameActive: {
-    color: '#1a1a2e',
   },
   presetPreview: {
     fontSize: 12,
-    color: '#888',
     marginTop: 2,
   },
   editText: {
     fontSize: 13,
-    color: '#3498db',
     fontWeight: '500',
     marginRight: 8,
   },
   check: {
     fontSize: 18,
-    color: '#1a1a2e',
     fontWeight: '700',
   },
   addBtn: {
@@ -330,12 +362,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#ddd',
     borderStyle: 'dashed',
   },
   addBtnText: {
     fontSize: 14,
-    color: '#3498db',
     fontWeight: '600',
   },
   // Editor styles
@@ -347,41 +377,34 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 14,
-    color: '#555',
     marginRight: 8,
   },
   nameInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ccc',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
     fontSize: 15,
-    color: '#1a1a2e',
   },
   noteEditRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#eee',
   },
   noteOriginal: {
     width: 40,
     fontSize: 15,
     fontWeight: '600',
-    color: '#888',
   },
   noteInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ddd',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
     fontSize: 15,
-    color: '#1a1a2e',
   },
   // Sensitivity picker
   sensitivityRow: {
@@ -394,26 +417,47 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#fff',
     alignItems: 'center',
-  },
-  sensitivityBtnActive: {
-    borderColor: '#1a1a2e',
-    backgroundColor: '#1a1a2e',
   },
   sensitivityLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#555',
-  },
-  sensitivityLabelActive: {
-    color: '#fff',
   },
   sensitivityDesc: {
     fontSize: 12,
-    color: '#888',
     marginBottom: 16,
     lineHeight: 17,
+  },
+  // A4 calibration
+  a4Row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    marginBottom: 8,
+  },
+  a4StepBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  a4StepLabel: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  a4Value: {
+    fontSize: 24,
+    fontWeight: '700',
+    minWidth: 90,
+    textAlign: 'center',
+  },
+  a4Reset: {
+    fontSize: 13,
+    fontWeight: '500',
+    textAlign: 'center',
+    marginBottom: 4,
   },
 });

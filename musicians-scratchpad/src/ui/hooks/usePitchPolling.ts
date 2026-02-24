@@ -4,9 +4,14 @@ import type { PitchResult } from '../../bridge/types';
 
 const FRAME_INTERVAL_MS = 33; // ~30 fps
 
-export function usePitchPolling(isListening: boolean): PitchResult | null {
+export function usePitchPolling(
+  isListening: boolean,
+  paused: boolean = false,
+): PitchResult | null {
   const [pitch, setPitch] = useState<PitchResult | null>(null);
   const lastTimestamp = useRef(0);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   useEffect(() => {
     if (!isListening) {
@@ -21,13 +26,15 @@ export function usePitchPolling(isListening: boolean): PitchResult | null {
     const poll = (currentTime: number) => {
       if (currentTime - lastFrameTime >= FRAME_INTERVAL_MS) {
         lastFrameTime = currentTime;
-        const result = AudioPitchModule.getLatestPitch();
-        if (result && result.timestamp !== lastTimestamp.current) {
-          lastTimestamp.current = result.timestamp;
-          setPitch(result);
-        } else if (!result) {
-          setPitch(null);
-          lastTimestamp.current = 0;
+        if (!pausedRef.current) {
+          const result = AudioPitchModule.getLatestPitch();
+          if (result && result.timestamp !== lastTimestamp.current) {
+            lastTimestamp.current = result.timestamp;
+            setPitch(result);
+          } else if (!result) {
+            setPitch(null);
+            lastTimestamp.current = 0;
+          }
         }
       }
       rafId = requestAnimationFrame(poll);

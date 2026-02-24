@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useTheme } from '../theme/ThemeContext';
 
 interface Props {
   cents: number | null;
@@ -7,29 +8,30 @@ interface Props {
 
 // Positive cents → sharp (right), negative → flat (left)
 export function CentIndicator({ cents }: Props) {
+  const { colors } = useTheme();
   const clamped = cents !== null ? Math.max(-50, Math.min(50, cents)) : null;
   const inTune  = clamped !== null && Math.abs(clamped) <= 5;
 
   return (
     <View style={styles.container}>
-      <Text style={styles.label}>flat</Text>
-      <View style={styles.track}>
-        <View style={styles.center} />
+      <Text style={[styles.label, { color: colors.textMuted }]}>flat</Text>
+      <View style={[styles.track, { backgroundColor: colors.border }]}>
+        <View style={[styles.center, { backgroundColor: colors.text }]} />
         {clamped !== null && (
           <View
             style={[
               styles.needle,
               {
-                backgroundColor: inTune ? '#27ae60' : '#e67e22',
+                backgroundColor: inTune ? colors.accentSuccess : colors.accentWarning,
                 left: `${50 + (clamped / 50) * 46}%` as unknown as number,
               },
             ]}
           />
         )}
       </View>
-      <Text style={styles.label}>sharp</Text>
+      <Text style={[styles.label, { color: colors.textMuted }]}>sharp</Text>
       {clamped !== null && (
-        <Text style={styles.centsValue}>
+        <Text style={[styles.centsValue, { color: colors.textSecondary }]}>
           {clamped > 0 ? `+${clamped}` : `${clamped}`} ¢
         </Text>
       )}
@@ -46,7 +48,6 @@ const styles = StyleSheet.create({
   track: {
     width: '100%',
     height: 8,
-    backgroundColor: '#ddd',
     borderRadius: 4,
     position: 'relative',
     justifyContent: 'center',
@@ -57,7 +58,6 @@ const styles = StyleSheet.create({
     left: '50%' as unknown as number,
     width: 2,
     height: 16,
-    backgroundColor: '#333',
     top: -4,
   },
   needle: {
@@ -70,12 +70,10 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 11,
-    color: '#888',
     alignSelf: 'center',
   },
   centsValue: {
     fontSize: 14,
-    color: '#555',
     marginTop: 4,
   },
 });

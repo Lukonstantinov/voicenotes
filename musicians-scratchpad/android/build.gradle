@@ -17,6 +17,8 @@ allprojects {
     google()
     mavenCentral()
     maven { url 'https://www.jitpack.io' }
+    // AsyncStorage v3 ships a KMP artifact in a local Maven repo inside node_modules
+    maven { url "$rootDir/../node_modules/@react-native-async-storage/async-storage/android/local_repo" }
   }
 }
 

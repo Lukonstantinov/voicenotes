@@ -16,6 +16,7 @@ import { saveSession } from '../../utils/sessionStorage';
 import { uid } from '../../utils/uid';
 import type { Session, NotationPreset } from '../../utils/sessionTypes';
 import { translateNote } from '../../utils/notationSystems';
+import { useTheme } from '../theme/ThemeContext';
 
 async function requestMicPermission(): Promise<boolean> {
   if (Platform.OS === 'android') {
@@ -44,6 +45,7 @@ interface Props {
 }
 
 export function RecordingScreen({ onFinish, onCancel, notation }: Props) {
+  const { colors } = useTheme();
   const {
     isRecording,
     elapsedMs,
@@ -87,13 +89,13 @@ export function RecordingScreen({ onFinish, onCancel, notation }: Props) {
   const displayNote = currentPitch ? translateNote(currentPitch.noteName, notation) : null;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.cancelText}>Cancel</Text>
+          <Text style={[styles.cancelText, { color: colors.accentDanger }]}>Cancel</Text>
         </TouchableOpacity>
-        <Text style={styles.timer}>{elapsed}</Text>
+        <Text style={[styles.timer, { color: colors.text }]}>{elapsed}</Text>
         <View style={{ width: 60 }} />
       </View>
 
@@ -101,8 +103,8 @@ export function RecordingScreen({ onFinish, onCancel, notation }: Props) {
       <View style={styles.pitchArea}>
         {displayNote && currentPitch ? (
           <View style={styles.noteRow}>
-            <Text style={styles.noteName}>{displayNote}</Text>
-            <Text style={styles.octave}>{currentPitch.octave}</Text>
+            <Text style={[styles.noteName, { color: colors.text }]}>{displayNote}</Text>
+            <Text style={[styles.octave, { color: colors.textSecondary }]}>{currentPitch.octave}</Text>
           </View>
         ) : (
           <PitchDisplay pitch={null} />
@@ -127,8 +129,8 @@ export function RecordingScreen({ onFinish, onCancel, notation }: Props) {
             <Text style={styles.btnLabel}>Start Recording</Text>
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={styles.stopBtn} onPress={handleStop}>
-            <Text style={styles.btnLabelWhite}>Stop & Save</Text>
+          <TouchableOpacity style={[styles.stopBtn, { backgroundColor: colors.text }]} onPress={handleStop}>
+            <Text style={[styles.btnLabel, { color: colors.background }]}>Stop & Save</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -155,7 +157,6 @@ function formatSessionName(timestamp: number): string {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f9f9f9',
   },
   header: {
     flexDirection: 'row',
@@ -167,14 +168,12 @@ const styles = StyleSheet.create({
   },
   cancelText: {
     fontSize: 15,
-    color: '#e74c3c',
     fontWeight: '500',
     width: 60,
   },
   timer: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#1a1a2e',
     fontVariant: ['tabular-nums'],
   },
   pitchArea: {
@@ -188,13 +187,11 @@ const styles = StyleSheet.create({
   noteName: {
     fontSize: 64,
     fontWeight: '700',
-    color: '#1a1a2e',
     lineHeight: 72,
   },
   octave: {
     fontSize: 28,
     fontWeight: '400',
-    color: '#555',
     marginBottom: 8,
     marginLeft: 2,
   },
@@ -217,14 +214,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     paddingVertical: 14,
     borderRadius: 28,
-    backgroundColor: '#1a1a2e',
   },
   btnLabel: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  btnLabelWhite: {
     fontSize: 16,
     fontWeight: '700',
     color: '#fff',

@@ -34,6 +34,8 @@ export interface Spec extends TurboModule {
   getLatestPitch(): PitchResult | null;
   /** Update the three runtime-tunable sensitivity constants. */
   setSensitivity(silenceDb: number, confidenceEnter: number, confidenceExit: number): void;
+  /** Update the A4 reference frequency used for note name / cents calculation. */
+  setA4Calibration(hz: number): void;
   /** Offline pitch analysis of a local audio file. Resolves with one frame per detected note window. */
   analyzeAudioFile(filePath: string): Promise<ReadonlyArray<RawPitchFrame>>;
 }
