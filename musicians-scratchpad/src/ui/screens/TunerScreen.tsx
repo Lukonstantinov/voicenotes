@@ -17,6 +17,7 @@ import AudioPitchModule from '../../bridge/NativeAudioPitchModule';
 import type { RawPitchFrame } from '../../bridge/NativeAudioPitchModule';
 import { usePitchPolling } from '../hooks/usePitchPolling';
 import { PitchDisplay } from '../components/PitchDisplay';
+import { PitchGraph } from '../components/PitchGraph';
 import { CentIndicator } from '../components/CentIndicator';
 import { ListenButton } from '../components/ListenButton';
 import { AppStatusBar } from '../components/AppStatusBar';
@@ -193,6 +194,11 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
         <PitchDisplay pitch={null} />
       )}
       <CentIndicator cents={pitch?.cents ?? null} />
+      {isListening && (
+        <View style={styles.graphContainer}>
+          <PitchGraph pitch={pitch} />
+        </View>
+      )}
       <ListenButton
         isListening={isListening}
         onPress={handleButtonPress}
@@ -238,6 +244,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: 1,
+  },
+  graphContainer: {
+    marginTop: 8,
+    alignItems: 'center',
   },
   noteContainer: {
     alignItems: 'center',
