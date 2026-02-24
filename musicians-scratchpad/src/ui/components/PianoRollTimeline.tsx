@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { RecordedNote, CorrectedNote, NotationPreset } from '../../utils/sessionTypes';
 import { translateNote, ENGLISH_PRESET } from '../../utils/notationSystems';
+import { getNoteColor } from '../../utils/noteColors';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -10,13 +11,6 @@ const ROW_HEIGHT = 28;
 const NOTE_LABEL_WIDTH = 40;
 const MIN_NOTE_WIDTH = 4;
 const SEMITONE_PADDING = 2; // extra rows above/below range
-
-/** 12-colour palette for note names (C=0 through B=11). */
-const NOTE_COLORS: Record<string, string> = {
-  'C': '#e74c3c', 'C#': '#e67e22', 'D': '#f1c40f', 'D#': '#2ecc71',
-  'E': '#1abc9c', 'F': '#3498db', 'F#': '#2980b9', 'G': '#9b59b6',
-  'G#': '#8e44ad', 'A': '#e84393', 'A#': '#fd79a8', 'B': '#636e72',
-};
 
 const CORRECTED_ALPHA = '66'; // hex alpha for corrected overlay
 
@@ -152,7 +146,7 @@ export function PianoRollTimeline({
           const row = maxMidi - midi;
           const x = (note.startMs / 1000) * PIXELS_PER_SECOND;
           const w = Math.max(MIN_NOTE_WIDTH, ((note.endMs - note.startMs) / 1000) * PIXELS_PER_SECOND);
-          const color = NOTE_COLORS[note.noteName] ?? '#999';
+          const color = getNoteColor(note.noteName);
           const isCorrected = showCorrected && 'wasPitchCorrected' in note;
 
           return (

@@ -23,6 +23,7 @@ import { AppStatusBar } from '../components/AppStatusBar';
 import type { AppState as AudioAppState } from '../components/AppStatusBar';
 import type { NotationPreset, Session } from '../../utils/sessionTypes';
 import { translateNote } from '../../utils/notationSystems';
+import { getNoteColor } from '../../utils/noteColors';
 import { pitchFramesToNotes } from '../../utils/pitchFrameToNotes';
 import { saveSession } from '../../utils/sessionStorage';
 import { uid } from '../../utils/uid';
@@ -167,6 +168,7 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
 
   // Translate note display
   const displayNote = pitch ? translateNote(pitch.noteName, notation) : null;
+  const noteColor = pitch ? getNoteColor(pitch.noteName) : '#1a1a2e';
 
   return (
     <View style={styles.body}>
@@ -182,7 +184,7 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
       )}
       {displayNote && pitch ? (
         <View style={styles.noteContainer}>
-          <Text style={styles.noteName}>{displayNote}</Text>
+          <Text style={[styles.noteName, { color: noteColor }]}>{displayNote}</Text>
           <Text style={styles.octave}>{pitch.octave}</Text>
         </View>
       ) : (
