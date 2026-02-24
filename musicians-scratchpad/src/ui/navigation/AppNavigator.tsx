@@ -2,7 +2,8 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Session, NotationPreset } from '../../utils/sessionTypes';
-import { getActivePreset } from '../../utils/settingsStorage';
+import { getActivePreset, getMicSensitivity, SENSITIVITY_CONFIGS } from '../../utils/settingsStorage';
+import AudioPitchModule from '../../bridge/NativeAudioPitchModule';
 import { ENGLISH_PRESET } from '../../utils/notationSystems';
 import { TunerScreen } from '../screens/TunerScreen';
 import { RecordingScreen } from '../screens/RecordingScreen';
@@ -29,6 +30,14 @@ export function AppNavigator() {
     getActivePreset().then(setNotation);
   }, [screen]);
 
+  // Apply saved mic sensitivity once on mount
+  useEffect(() => {
+    getMicSensitivity().then((level) => {
+      const cfg = SENSITIVITY_CONFIGS[level];
+      AudioPitchModule.setSensitivity(cfg.silenceDb, cfg.confidenceEnter, cfg.confidenceExit);
+    });
+  }, []);
+
   const goToRecording = useCallback(() => setScreen({ name: 'recording' }), []);
   const goToTuner = useCallback(() => setScreen({ name: 'tuner' }), []);
   const goToReview = useCallback((session: Session) => setScreen({ name: 'review', session }), []);
@@ -44,7 +53,13 @@ export function AppNavigator() {
   const renderScreen = () => {
     switch (screen.name) {
       case 'tuner':
-        return <TunerScreen onStartRecording={goToRecording} notation={notation} />;
+        return (
+          <TunerScreen
+            onStartRecording={goToRecording}
+            onImportSession={goToReview}
+            notation={notation}
+          />
+        );
       case 'recording':
         return (
           <RecordingScreen

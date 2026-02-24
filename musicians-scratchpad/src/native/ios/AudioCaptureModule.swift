@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 import os.log
 
-// MARK: - Constants
+// MARK: - Constants (compile-time defaults; runtime values live in the instance)
 
 private let kYinThreshold: Float     = 0.12
 private let kConfidenceEnter: Float  = 0.80
@@ -56,6 +56,11 @@ class AudioCaptureModule: NSObject {
   private var isShowingPitch   = false
   private var prevFrequency: Float = 0
   private var octaveHoldCount  = 0
+
+  // Runtime-tunable sensitivity (updated via setSensitivity, read on audio thread)
+  private var dynSilenceDb: Float  = kRmsSilenceDb
+  private var dynConfEnter: Float  = kConfidenceEnter
+  private var dynConfExit: Float   = kConfidenceExit
 
   // Atomic state (guarded by stateLock)
   private var stateLock   = pthread_mutex_t()
@@ -111,6 +116,162 @@ class AudioCaptureModule: NSObject {
       "confidence": state.confidence,
       "timestamp":  state.timestamp,
     ] as NSDictionary
+  }
+
+  /// Update the three runtime-tunable sensitivity constants.
+  @objc func setSensitivity(_ silenceDb: Double,
+                             confidenceEnter: Double,
+                             confidenceExit: Double) {
+    dynSilenceDb = Float(silenceDb)
+    dynConfEnter = Float(confidenceEnter)
+    dynConfExit  = Float(confidenceExit)
+  }
+
+  /// Offline pitch analysis of a local audio file.
+  @objc func analyzeAudioFile(_ filePath: String,
+                               resolve: @escaping RCTPromiseResolveBlock,
+                               reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      guard let self = self else { return }
+
+      let url = URL(fileURLWithPath: filePath)
+      guard let audioFile = try? AVAudioFile(forReading: url) else {
+        reject("FILE_OPEN_ERROR", "Cannot open audio file: \(filePath)", nil)
+        return
+      }
+
+      let fileSampleRate = Float(audioFile.processingFormat.sampleRate)
+      let channelCount   = Int(audioFile.processingFormat.channelCount)
+      let totalFrames    = Int(audioFile.length)
+
+      // Offline-only DSP buffers (not shared with live capture)
+      var offRing   = [Float](repeating: 0, count: kAnalysisSize)
+      var offWin    = [Float](repeating: 0, count: kAnalysisSize)
+      var offDiff   = [Float](repeating: 0, count: kAnalysisSize / 2)
+      var offCMND   = [Float](repeating: 0, count: kAnalysisSize / 2)
+      var offMedian = [Float](repeating: 0, count: kMedianWindow)
+
+      var ringWrite     = 0
+      var samplesInRing = 0
+      var medIdx        = 0
+      var medCount      = 0
+      var prevFreq: Float = 0
+      var octHold       = 0
+      var isShowingNote = false
+
+      // Snapshot sensitivity at analysis start
+      let silenceDb = self.dynSilenceDb
+      let confEnter = self.dynConfEnter
+      let confExit  = self.dynConfExit
+
+      var frames: [[String: Any]] = []
+      var processedSamples = 0
+
+      guard let pcmBuf = AVAudioPCMBuffer(
+        pcmFormat: audioFile.processingFormat,
+        frameCapacity: AVAudioFrameCount(kCaptureSize)
+      ) else {
+        reject("BUFFER_ERROR", "Cannot allocate PCM buffer", nil)
+        return
+      }
+
+      while processedSamples < totalFrames {
+        pcmBuf.frameLength = 0
+        do { try audioFile.read(into: pcmBuf) } catch { break }
+        let framesRead = Int(pcmBuf.frameLength)
+        guard framesRead > 0 else { break }
+
+        // Mix to mono
+        var mono = [Float](repeating: 0, count: framesRead)
+        if let ch = pcmBuf.floatChannelData {
+          for c in 0..<channelCount {
+            for i in 0..<framesRead { mono[i] += ch[c][i] }
+          }
+          if channelCount > 1 {
+            let inv = 1.0 / Float(channelCount)
+            for i in 0..<framesRead { mono[i] *= inv }
+          }
+        }
+
+        // Fill ring buffer
+        for i in 0..<framesRead {
+          offRing[ringWrite] = mono[i]
+          ringWrite = (ringWrite + 1) & (kAnalysisSize - 1)
+        }
+        samplesInRing = min(samplesInRing + framesRead, kAnalysisSize)
+
+        if samplesInRing >= kAnalysisSize {
+          // Unroll ring into contiguous window
+          for i in 0..<kAnalysisSize {
+            offWin[i] = offRing[(ringWrite + i) & (kAnalysisSize - 1)]
+          }
+
+          // RMS silence gate
+          var sumSq: Float = 0
+          for i in 0..<kAnalysisSize { sumSq += offWin[i] * offWin[i] }
+          let rms   = sqrtf(sumSq / Float(kAnalysisSize))
+          let rmsDb = rms > 0 ? 20 * log10f(rms) : -200
+
+          let tsMs = Double(processedSamples) / Double(fileSampleRate) * 1000.0
+
+          if rmsDb >= silenceDb,
+             let (rawFreq, confidence) = self.yinOffline(
+               win: &offWin, diff: &offDiff, cmnd: &offCMND, sr: fileSampleRate) {
+
+            // Confidence hysteresis
+            let passes = isShowingNote ? confidence >= confExit
+                                       : confidence >= confEnter
+            if passes {
+              // Octave jump suppression
+              var freq = rawFreq
+              if prevFreq > 0 {
+                let ratio = freq / prevFreq
+                if (ratio > 1.85 && ratio < 2.15) || (ratio > 0.46 && ratio < 0.54) {
+                  if octHold < kOctaveSuppressMax { freq = prevFreq; octHold += 1 }
+                  else { octHold = 0 }
+                } else { octHold = 0 }
+              }
+              prevFreq = freq
+
+              // 3-frame median filter
+              offMedian[medIdx] = freq
+              medIdx   = (medIdx + 1) % kMedianWindow
+              medCount = min(medCount + 1, kMedianWindow)
+              var medFreq = freq
+              if medCount == 2 {
+                medFreq = (offMedian[0] + offMedian[1]) / 2
+              } else if medCount >= 3 {
+                var a = offMedian[0], b = offMedian[1], c = offMedian[2]
+                if a > b { swap(&a, &b) }; if b > c { swap(&b, &c) }; if a > b { swap(&a, &b) }
+                medFreq = b
+              }
+
+              if let note = self.frequencyToNote(medFreq) {
+                isShowingNote = true
+                frames.append([
+                  "noteName":    note.noteName,
+                  "octave":      note.octave,
+                  "frequency":   medFreq,
+                  "cents":       note.cents,
+                  "confidence":  confidence,
+                  "timestampMs": tsMs,
+                ])
+              }
+            } else {
+              isShowingNote = false
+              medCount = 0
+            }
+          } else {
+            isShowingNote = false
+            medCount = 0
+          }
+        }
+
+        processedSamples += framesRead
+      }
+
+      resolve(frames)
+    }
   }
 
   // MARK: - Audio session
@@ -208,6 +369,11 @@ class AudioCaptureModule: NSObject {
     guard let ch = buffer.floatChannelData?[0] else { return }
     let n = Int(buffer.frameLength)
 
+    // Snapshot sensitivity (written from JS thread; one-frame race is harmless)
+    let silenceDb = dynSilenceDb
+    let confEnter = dynConfEnter
+    let confExit  = dynConfExit
+
     // Fill ring buffer
     for i in 0..<n {
       ringBuffer[ringWritePos] = ch[i]
@@ -226,16 +392,16 @@ class AudioCaptureModule: NSObject {
     for i in 0..<kAnalysisSize { sumSq += analysisWin[i] * analysisWin[i] }
     let rms   = sqrtf(sumSq / Float(kAnalysisSize))
     let rmsDb = rms > 0 ? 20 * log10f(rms) : -200
-    guard rmsDb >= kRmsSilenceDb else { clearState(); return }
+    guard rmsDb >= silenceDb else { clearState(); return }
 
     // [2] YIN
     guard let (rawFreq, confidence) = yin() else { clearState(); return }
 
     // [3] Confidence hysteresis
     if isShowingPitch {
-      guard confidence >= kConfidenceExit  else { clearState(); return }
+      guard confidence >= confExit  else { clearState(); return }
     } else {
-      guard confidence >= kConfidenceEnter else { return }
+      guard confidence >= confEnter else { return }
     }
 
     // [4] Octave jump suppression
@@ -349,6 +515,50 @@ class AudioCaptureModule: NSObject {
     let frequency = sampleRate / refined
     guard frequency >= kMinFrequency, frequency <= kMaxFrequency else { return nil }
     let confidence = max(0, min(1, 1.0 - yinCMND[tauEst]))
+    return (frequency, confidence)
+  }
+
+  // MARK: - Offline YIN (uses caller-provided buffers — thread-safe, no shared state)
+
+  private func yinOffline(win: inout [Float],
+                           diff: inout [Float],
+                           cmnd: inout [Float],
+                           sr: Float) -> (Float, Float)? {
+    let halfN = kAnalysisSize / 2
+
+    for tau in 1..<halfN {
+      var d: Float = 0
+      for j in 0..<halfN { let x = win[j] - win[j + tau]; d += x * x }
+      diff[tau] = d
+    }
+
+    cmnd[0] = 1.0
+    var runSum: Float = 0
+    for tau in 1..<halfN {
+      runSum += diff[tau]
+      cmnd[tau] = runSum > 0 ? diff[tau] * Float(tau) / runSum : 1.0
+    }
+
+    var tauEst = -1
+    for tau in 2..<halfN - 1 {
+      if cmnd[tau] < kYinThreshold {
+        var t = tau
+        while t + 1 < halfN - 1, cmnd[t + 1] < cmnd[t] { t += 1 }
+        tauEst = t; break
+      }
+    }
+    guard tauEst > 0 else { return nil }
+
+    let prev = max(1, tauEst - 1)
+    let next = min(halfN - 2, tauEst + 1)
+    let denom = 2 * (cmnd[prev] - 2 * cmnd[tauEst] + cmnd[next])
+    let refined: Float = abs(denom) > 1e-8
+      ? Float(tauEst) + (cmnd[prev] - cmnd[next]) / denom
+      : Float(tauEst)
+
+    let frequency = sr / refined
+    guard frequency >= kMinFrequency, frequency <= kMaxFrequency else { return nil }
+    let confidence = max(0, min(1, 1.0 - cmnd[tauEst]))
     return (frequency, confidence)
   }
 

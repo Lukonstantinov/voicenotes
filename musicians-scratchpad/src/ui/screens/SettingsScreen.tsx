@@ -21,7 +21,12 @@ import {
   setActivePreset,
   saveCustomPreset,
   deleteCustomPreset,
+  getMicSensitivity,
+  setMicSensitivity,
+  SENSITIVITY_CONFIGS,
 } from '../../utils/settingsStorage';
+import type { SensitivityLevel } from '../../utils/settingsStorage';
+import AudioPitchModule from '../../bridge/NativeAudioPitchModule';
 import { uid } from '../../utils/uid';
 
 interface Props {
@@ -32,6 +37,7 @@ export function SettingsScreen({ onBack }: Props) {
   const [presets, setPresets] = useState<NotationPreset[]>(BUILT_IN_PRESETS);
   const [activeId, setActiveId] = useState('english');
   const [editingPreset, setEditingPreset] = useState<NotationPreset | null>(null);
+  const [sensitivity, setSensitivity] = useState<SensitivityLevel>('medium');
 
   const refresh = useCallback(async () => {
     const all = await getAllPresets();
@@ -42,7 +48,15 @@ export function SettingsScreen({ onBack }: Props) {
 
   useEffect(() => {
     refresh();
+    getMicSensitivity().then(setSensitivity);
   }, [refresh]);
+
+  const handleSensitivity = useCallback(async (level: SensitivityLevel) => {
+    setSensitivity(level);
+    await setMicSensitivity(level);
+    const cfg = SENSITIVITY_CONFIGS[level];
+    AudioPitchModule.setSensitivity(cfg.silenceDb, cfg.confidenceEnter, cfg.confidenceExit);
+  }, []);
 
   const handleSelect = useCallback(async (id: string) => {
     await setActivePreset(id);
@@ -150,6 +164,28 @@ export function SettingsScreen({ onBack }: Props) {
       </View>
 
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+        <Text style={styles.sectionTitle}>Mic Sensitivity</Text>
+        <View style={styles.sensitivityRow}>
+          {(['low', 'medium', 'high'] as SensitivityLevel[]).map((level) => {
+            const cfg = SENSITIVITY_CONFIGS[level];
+            const active = sensitivity === level;
+            return (
+              <TouchableOpacity
+                key={level}
+                style={[styles.sensitivityBtn, active && styles.sensitivityBtnActive]}
+                onPress={() => handleSensitivity(level)}
+              >
+                <Text style={[styles.sensitivityLabel, active && styles.sensitivityLabelActive]}>
+                  {cfg.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={styles.sensitivityDesc}>
+          {SENSITIVITY_CONFIGS[sensitivity].description}
+        </Text>
+
         <Text style={styles.sectionTitle}>Notation System</Text>
 
         {presets.map((preset) => (
@@ -346,5 +382,38 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     fontSize: 15,
     color: '#1a1a2e',
+  },
+  // Sensitivity picker
+  sensitivityRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 6,
+  },
+  sensitivityBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+  },
+  sensitivityBtnActive: {
+    borderColor: '#1a1a2e',
+    backgroundColor: '#1a1a2e',
+  },
+  sensitivityLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#555',
+  },
+  sensitivityLabelActive: {
+    color: '#fff',
+  },
+  sensitivityDesc: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 16,
+    lineHeight: 17,
   },
 });
