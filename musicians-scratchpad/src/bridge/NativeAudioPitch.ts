@@ -17,11 +17,25 @@ export interface PitchResult {
   timestamp: number;
 }
 
+/** One pitch-detected frame returned by analyzeAudioFile. */
+export interface RawPitchFrame {
+  noteName: string;
+  octave: number;
+  frequency: number;
+  cents: number;
+  confidence: number;
+  timestampMs: number;
+}
+
 export interface Spec extends TurboModule {
   startListening(): void;
   stopListening(): void;
   // Non-Promise return → synchronous JSI call in TurboModule runtime
   getLatestPitch(): PitchResult | null;
+  /** Update the three runtime-tunable sensitivity constants. */
+  setSensitivity(silenceDb: number, confidenceEnter: number, confidenceExit: number): void;
+  /** Offline pitch analysis of a local audio file. Resolves with one frame per detected note window. */
+  analyzeAudioFile(filePath: string): Promise<ReadonlyArray<RawPitchFrame>>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('AudioPitch');
