@@ -132,8 +132,9 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
     if (result.canceled || !result.assets?.[0]) return;
 
     const asset = result.assets[0];
-    // Strip file:// prefix so AVFoundation can open the path directly
-    const filePath = asset.uri.replace(/^file:\/\//, '');
+    // Decode percent-encoding (e.g. %20 → space) then strip file:// so
+    // AVFoundation / MediaExtractor receive a plain filesystem path.
+    const filePath = decodeURIComponent(asset.uri.replace(/^file:\/\//, ''));
 
     setIsImporting(true);
     try {

@@ -3,9 +3,13 @@ package com.dev.musicianscratchpad
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaRecorder
 import android.util.Log
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -132,6 +136,198 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
             putDouble("confidence", state.confidence.toDouble())
             putDouble("timestamp",  state.timestamp)
         }
+    }
+
+    /** Offline pitch analysis of a local audio file. */
+    @ReactMethod
+    fun analyzeAudioFile(filePath: String, promise: Promise) {
+        Thread {
+            try {
+                // ── 1. Demux with MediaExtractor ──────────────────────────
+                val extractor = MediaExtractor()
+                extractor.setDataSource(filePath)
+
+                var trackIndex = -1
+                var trackFormat: MediaFormat? = null
+                for (i in 0 until extractor.trackCount) {
+                    val fmt  = extractor.getTrackFormat(i)
+                    val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+                    if (mime.startsWith("audio/")) { trackIndex = i; trackFormat = fmt; break }
+                }
+                if (trackIndex < 0 || trackFormat == null) {
+                    extractor.release()
+                    promise.reject("FILE_OPEN_ERROR", "No audio track found: $filePath")
+                    return@Thread
+                }
+                extractor.selectTrack(trackIndex)
+
+                val fileSampleRate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                val channelCount   = if (trackFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT))
+                    trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 1
+                val mime = trackFormat.getString(MediaFormat.KEY_MIME)!!
+
+                // ── 2. Decode to PCM using MediaCodec ─────────────────────
+                val codec = MediaCodec.createDecoderByType(mime)
+                codec.configure(trackFormat, null, null, 0)
+                codec.start()
+
+                val allSamples  = ArrayList<Float>(1 shl 20) // pre-alloc ~4 M floats
+                val bufInfo     = MediaCodec.BufferInfo()
+                var sawInputEOS = false
+                var sawOutputEOS = false
+                var outputFormat: MediaFormat? = null
+
+                while (!sawOutputEOS) {
+                    if (!sawInputEOS) {
+                        val inIdx = codec.dequeueInputBuffer(10_000L)
+                        if (inIdx >= 0) {
+                            val inBuf = codec.getInputBuffer(inIdx)!!
+                            val n     = extractor.readSampleData(inBuf, 0)
+                            if (n < 0) {
+                                codec.queueInputBuffer(inIdx, 0, 0, 0L,
+                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                sawInputEOS = true
+                            } else {
+                                codec.queueInputBuffer(inIdx, 0, n, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+
+                    val outIdx = codec.dequeueOutputBuffer(bufInfo, 10_000L)
+                    when {
+                        outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED ->
+                            outputFormat = codec.outputFormat
+                        outIdx >= 0 -> {
+                            val outBuf = codec.getOutputBuffer(outIdx)!!
+                            val fmt    = outputFormat ?: codec.outputFormat
+                            val pcmEnc = if (fmt.containsKey(MediaFormat.KEY_PCM_ENCODING))
+                                fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                            else AudioFormat.ENCODING_PCM_16BIT
+
+                            if (pcmEnc == AudioFormat.ENCODING_PCM_FLOAT) {
+                                val fb = outBuf.asFloatBuffer()
+                                while (fb.hasRemaining()) allSamples.add(fb.get())
+                            } else {
+                                // PCM_16BIT — convert to [-1, 1] float
+                                val sb = outBuf.asShortBuffer()
+                                while (sb.hasRemaining())
+                                    allSamples.add(sb.get().toFloat() / 32768f)
+                            }
+                            codec.releaseOutputBuffer(outIdx, false)
+                            if (bufInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0)
+                                sawOutputEOS = true
+                        }
+                    }
+                }
+                codec.stop(); codec.release(); extractor.release()
+
+                // ── 3. Mix to mono ────────────────────────────────────────
+                val monoSamples: FloatArray
+                if (channelCount > 1) {
+                    val monoSize = allSamples.size / channelCount
+                    monoSamples  = FloatArray(monoSize)
+                    val inv      = 1f / channelCount
+                    for (i in 0 until monoSize) {
+                        var sum = 0f
+                        for (c in 0 until channelCount) sum += allSamples[i * channelCount + c]
+                        monoSamples[i] = sum * inv
+                    }
+                } else {
+                    monoSamples = allSamples.toFloatArray()
+                }
+
+                // ── 4. YIN offline analysis ───────────────────────────────
+                val offRing   = FloatArray(ANALYSIS_SIZE)
+                val offWin    = FloatArray(ANALYSIS_SIZE)
+                val offDiff   = FloatArray(ANALYSIS_SIZE / 2)
+                val offCMND   = FloatArray(ANALYSIS_SIZE / 2)
+                val offMedian = FloatArray(MEDIAN_WINDOW)
+
+                var ringWrite       = 0
+                var samplesInRingOff = 0
+                var medIdx          = 0
+                var medCountOff     = 0
+                var prevFreq        = 0f
+                var octHold         = 0
+                var isShowingNote   = false
+
+                val frames = Arguments.createArray()
+                var processed = 0
+
+                while (processed < monoSamples.size) {
+                    val end       = minOf(processed + CAPTURE_SIZE, monoSamples.size)
+                    val chunkSize = end - processed
+                    for (i in 0 until chunkSize) {
+                        offRing[ringWrite] = monoSamples[processed + i]
+                        ringWrite = (ringWrite + 1) and (ANALYSIS_SIZE - 1)
+                    }
+                    samplesInRingOff = minOf(samplesInRingOff + chunkSize, ANALYSIS_SIZE)
+                    processed += chunkSize
+                    if (samplesInRingOff < ANALYSIS_SIZE) continue
+
+                    // Unroll ring buffer into contiguous window
+                    for (i in 0 until ANALYSIS_SIZE)
+                        offWin[i] = offRing[(ringWrite + i) and (ANALYSIS_SIZE - 1)]
+
+                    // RMS silence gate
+                    var sumSq = 0f
+                    for (v in offWin) sumSq += v * v
+                    val rms   = sqrt(sumSq / ANALYSIS_SIZE)
+                    val rmsDb = if (rms > 0f) 20f * log10(rms) else -200f
+                    val tsMs  = processed.toDouble() / fileSampleRate.toDouble() * 1000.0
+
+                    if (rmsDb >= RMS_SILENCE_DB) {
+                        val yr = yinOffline(offWin, offDiff, offCMND, fileSampleRate.toFloat())
+                        if (yr != null) {
+                            val (rawFreq, confidence) = yr
+                            val passes = if (isShowingNote) confidence >= CONFIDENCE_EXIT
+                                         else               confidence >= CONFIDENCE_ENTER
+                            if (passes) {
+                                var freq = rawFreq
+                                if (prevFreq > 0f) {
+                                    val ratio = freq / prevFreq
+                                    if ((ratio > 1.85f && ratio < 2.15f) ||
+                                        (ratio > 0.46f && ratio < 0.54f)) {
+                                        if (octHold < OCTAVE_SUPPRESS_MAX) { freq = prevFreq; octHold++ }
+                                        else octHold = 0
+                                    } else octHold = 0
+                                }
+                                prevFreq = freq
+
+                                offMedian[medIdx] = freq
+                                medIdx      = (medIdx + 1) % MEDIAN_WINDOW
+                                medCountOff = minOf(medCountOff + 1, MEDIAN_WINDOW)
+
+                                val medFreq = when (medCountOff) {
+                                    1    -> offMedian[0]
+                                    2    -> (offMedian[0] + offMedian[1]) / 2f
+                                    else -> offMedian.copyOf(MEDIAN_WINDOW).also { it.sort() }[1]
+                                }
+
+                                val note = frequencyToNote(medFreq)
+                                if (note != null) {
+                                    isShowingNote = true
+                                    val frame = Arguments.createMap()
+                                    frame.putString("noteName",    note.noteName)
+                                    frame.putInt   ("octave",      note.octave)
+                                    frame.putDouble("frequency",   medFreq.toDouble())
+                                    frame.putInt   ("cents",       note.cents)
+                                    frame.putDouble("confidence",  confidence.toDouble())
+                                    frame.putDouble("timestampMs", tsMs)
+                                    frames.pushMap(frame)
+                                }
+                            } else { isShowingNote = false; medCountOff = 0 }
+                        } else { isShowingNote = false; medCountOff = 0 }
+                    } else { isShowingNote = false; medCountOff = 0 }
+                }
+
+                promise.resolve(frames)
+            } catch (e: Exception) {
+                promise.reject("FILE_OPEN_ERROR",
+                    "Cannot analyse audio file: $filePath. ${e.message}", e)
+            }
+        }.also { it.isDaemon = true }.start()
     }
 
     // ─────────────────────────────────────────────────────────
@@ -308,6 +504,45 @@ class AudioCaptureModule(private val reactContext: ReactApplicationContext)
     private fun clearState() {
         isShowingPitch = false
         synchronized(stateLock) { latestState = PitchState() }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Offline YIN (caller-supplied buffers — thread-safe)
+    // ─────────────────────────────────────────────────────────
+
+    private fun yinOffline(win: FloatArray, diff: FloatArray,
+                            cmnd: FloatArray, sr: Float): Pair<Float, Float>? {
+        val halfN = ANALYSIS_SIZE / 2
+        for (tau in 1 until halfN) {
+            var d = 0f
+            for (j in 0 until halfN) { val x = win[j] - win[j + tau]; d += x * x }
+            diff[tau] = d
+        }
+        cmnd[0] = 1f
+        var runSum = 0f
+        for (tau in 1 until halfN) {
+            runSum += diff[tau]
+            cmnd[tau] = if (runSum > 0f) diff[tau] * tau / runSum else 1f
+        }
+        var tauEst = -1
+        for (tau in 2 until halfN - 1) {
+            if (cmnd[tau] < YIN_THRESHOLD) {
+                var t = tau
+                while (t + 1 < halfN - 1 && cmnd[t + 1] < cmnd[t]) t++
+                tauEst = t; break
+            }
+        }
+        if (tauEst <= 0) return null
+        val prev  = maxOf(1, tauEst - 1)
+        val next  = minOf(halfN - 2, tauEst + 1)
+        val denom = 2f * (cmnd[prev] - 2f * cmnd[tauEst] + cmnd[next])
+        val refined = if (abs(denom) > 1e-8f)
+            tauEst + (cmnd[prev] - cmnd[next]) / denom
+        else tauEst.toFloat()
+        val frequency = sr / refined
+        if (frequency < MIN_FREQUENCY || frequency > MAX_FREQUENCY) return null
+        val confidence = maxOf(0f, minOf(1f, 1f - cmnd[tauEst]))
+        return Pair(frequency, confidence)
     }
 
     // ─────────────────────────────────────────────────────────
