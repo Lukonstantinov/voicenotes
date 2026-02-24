@@ -59,11 +59,12 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
   const [audioState, setAudioState] = useState<AudioAppState>('idle');
   const [isImporting, setIsImporting] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isHeld, setIsHeld] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const wasListeningRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const pitch = usePitchPolling(isListening);
+  const pitch = usePitchPolling(isListening, isHeld);
 
   // Silence hint
   useEffect(() => {
@@ -109,6 +110,7 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
   const stopAudio = useCallback(() => {
     AudioPitchModule.stopListening();
     setIsListening(false);
+    setIsHeld(false);
     setAudioState('idle');
   }, []);
 
@@ -168,6 +170,16 @@ export function TunerScreen({ onStartRecording, onImportSession, notation }: Pro
 
   return (
     <View style={styles.body}>
+      {isListening && (
+        <TouchableOpacity
+          style={[styles.holdButton, isHeld && styles.holdButtonActive]}
+          onPress={() => setIsHeld(prev => !prev)}
+        >
+          <Text style={[styles.holdLabel, isHeld && styles.holdLabelActive]}>
+            {isHeld ? 'RESUME' : 'HOLD'}
+          </Text>
+        </TouchableOpacity>
+      )}
       {displayNote && pitch ? (
         <View style={styles.noteContainer}>
           <Text style={styles.noteName}>{displayNote}</Text>
@@ -206,6 +218,30 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  holdButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#1a1a2e',
+    backgroundColor: 'transparent',
+    zIndex: 10,
+  },
+  holdButtonActive: {
+    backgroundColor: '#1a1a2e',
+  },
+  holdLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1a1a2e',
+    letterSpacing: 1,
+  },
+  holdLabelActive: {
+    color: '#fff',
   },
   noteContainer: {
     alignItems: 'center',
