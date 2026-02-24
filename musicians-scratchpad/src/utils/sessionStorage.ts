@@ -34,10 +34,8 @@ export async function saveSession(session: Session): Promise<void> {
     summaries.unshift(summary);
   }
 
-  await AsyncStorage.multiSet([
-    [INDEX_KEY, JSON.stringify(summaries)],
-    [sessionKey(session.id), JSON.stringify(session)],
-  ]);
+  await AsyncStorage.setItem(INDEX_KEY, JSON.stringify(summaries));
+  await AsyncStorage.setItem(sessionKey(session.id), JSON.stringify(session));
 }
 
 /** Load a full session by ID. */
@@ -51,7 +49,7 @@ export async function loadSession(id: string): Promise<Session | null> {
 export async function deleteSession(id: string): Promise<void> {
   const summaries = await listSessions();
   const filtered = summaries.filter((s) => s.id !== id);
-  await AsyncStorage.multiSet([[INDEX_KEY, JSON.stringify(filtered)]]);
+  await AsyncStorage.setItem(INDEX_KEY, JSON.stringify(filtered));
   await AsyncStorage.removeItem(sessionKey(id));
 }
 
