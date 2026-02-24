@@ -1,0 +1,510 @@
+================================================================================
+  VOICENOTES / MUSICIANS-SCRATCHPAD — IMPROVEMENT PLAN
+  Repository: https://github.com/Lukonstantinov/voicenotes
+  Based on analysis vs. Vocal Pitch Monitor Pro & open-source pitch libs
+  Date: February 2026
+================================================================================
+
+
+OVERVIEW
+--------
+The repo is a React Native + Expo app (63% TypeScript) with custom native
+modules in Kotlin (Android, 21%) and Swift (iOS, 13.5%). This is the right
+architecture for a real-time pitch/audio app — JavaScript alone cannot handle
+low-latency DSP. The improvements below are broken into 5 priority tiers.
+
+
+================================================================================
+PRIORITY 1 — CRITICAL: PITCH DETECTION ACCURACY & PERFORMANCE
+================================================================================
+
+ISSUE: Most beginner implementations use zero-crossing detection, which is fast
+but wildly inaccurate for vocals (error up to ±20 semitones in noisy conditions).
+
+IMPROVEMENT 1.1 — Upgrade to YIN or ACF2+ algorithm
+-----------------------------------------------------
+Vocal Pitch Monitor Pro (the gold standard) uses autocorrelation. The best
+open-source equivalent is the YIN algorithm, proven to be the most accurate
+for monophonic vocal/instrumental signals.
+
+Target files: Kotlin native audio module, Swift native audio module
+
+Kotlin implementation pattern:
+  private fun detectPitchYIN(buffer: FloatArray, sampleRate: Int): Float? {
+      val N = buffer.size
+      val diff = FloatArray(N / 2)
+      for (tau in 1 until N / 2) {
+          var sum = 0f
+          for (i in 0 until N / 2) {
+              val delta = buffer[i] - buffer[i + tau]
+              sum += delta * delta
+          }
+          diff[tau] = sum
+      }
+      // Cumulative mean normalized difference
+      diff[0] = 1f
+      var runningSum = 0f
+      for (tau in 1 until N / 2) {
+          runningSum += diff[tau]
+          diff[tau] *= tau / runningSum
+      }
+      // Find first dip below threshold 0.1
+      for (tau in 2 until N / 2) {
+          if (diff[tau] < 0.1f && diff[tau] < diff[tau - 1]) {
+              return sampleRate.toFloat() / tau
+          }
+      }
+      return null  // no pitch detected
+  }
+
+Alternative: Use the 'react-native-pitchy' library (ACF2+ algorithm):
+  npm install @rnheroes/react-native-pitchy
+  ACF2+ is simpler to integrate and performs very close to YIN for vocals.
+
+
+IMPROVEMENT 1.2 — Add a Noise Gate / Volume Threshold
+------------------------------------------------------
+Without a noise floor cutoff, the pitch graph goes wild whenever there is
+ambient noise or breath sounds. Vocal Pitch Monitor users specifically praised
+its noise rejection.
+
+Kotlin pattern:
+  private val NOISE_FLOOR_DB = -50.0f
+
+  private fun calculateRMSdB(buffer: ShortArray): Float {
+      var sum = 0.0
+      for (sample in buffer) sum += (sample.toDouble() / 32768.0).pow(2.0)
+      val rms = sqrt(sum / buffer.size)
+      return if (rms > 0) (20 * log10(rms)).toFloat() else -100f
+  }
+
+  fun processFrame(buffer: ShortArray): Float? {
+      return if (calculateRMSdB(buffer) > NOISE_FLOOR_DB) detectPitch(buffer)
+      else null  // silence — do not update graph
+  }
+
+Expose this threshold as a user-configurable setting (e.g. a slider in Settings
+from -70dB "sensitive" to -30dB "strict").
+
+
+IMPROVEMENT 1.3 — Reduce Audio Buffer Latency
+---------------------------------------------
+A buffer size of 4096 gives ~93ms latency at 44100Hz — too slow for real-time
+visual feedback. Vocal Pitch Monitor is praised for sub-50ms response.
+
+Recommended buffer size: 2048 samples (~46ms at 44100Hz)
+If accuracy degrades, use a hop size of 512 with overlapping windows.
+
+Kotlin:
+  private val BUFFER_SIZE = 2048
+  private val audioRecord = AudioRecord(
+      MediaRecorder.AudioSource.MIC,
+      44100,
+      AudioFormat.CHANNEL_IN_MONO,
+      AudioFormat.ENCODING_PCM_FLOAT,
+      BUFFER_SIZE
+  )
+
+Note: AudioFormat.ENCODING_PCM_FLOAT (API 21+) is preferred over PCM_16BIT
+for pitch math — avoids integer-to-float conversion overhead.
+
+
+================================================================================
+PRIORITY 2 — HIGH: GRAPH RENDERING PERFORMANCE
+================================================================================
+
+ISSUE: If the pitch graph is driven by React setState() on every audio callback,
+it will cause 60+ re-renders per second and will stutter or drop frames.
+
+IMPROVEMENT 2.1 — Decouple Audio Thread from React Render Thread
+----------------------------------------------------------------
+Use a ref buffer and requestAnimationFrame instead of state updates:
+
+  // BAD — triggers full React re-render on every sample
+  const [pitchHistory, setPitchHistory] = useState<number[]>([]);
+  onPitchDetected(pitch => setPitchHistory(prev => [...prev, pitch]));
+
+  // GOOD — frame-rate decoupled rendering
+  const pitchBuffer = useRef<number[]>([]);
+  const rafId = useRef<number>();
+
+  useEffect(() => {
+    const subscription = PitchDetection.addListener(({ frequency }) => {
+      pitchBuffer.current.push(frequency);
+      if (pitchBuffer.current.length > MAX_VISIBLE_POINTS) {
+        pitchBuffer.current.shift();
+      }
+    });
+    const renderLoop = () => {
+      drawGraph(pitchBuffer.current);  // direct canvas call
+      rafId.current = requestAnimationFrame(renderLoop);
+    };
+    rafId.current = requestAnimationFrame(renderLoop);
+    return () => {
+      subscription.remove();
+      cancelAnimationFrame(rafId.current!);
+    };
+  }, []);
+
+
+IMPROVEMENT 2.2 — Migrate Graph to React Native Skia
+-----------------------------------------------------
+React Native Skia (@shopify/react-native-skia) renders directly on the GPU
+via a background thread — the gold standard for real-time visualizations in RN.
+
+Installation:
+  npx expo install @shopify/react-native-skia
+
+Pattern:
+  import { Canvas, Path, Skia } from '@shopify/react-native-skia';
+  import { useSharedValue, useDerivedValue } from 'react-native-reanimated';
+
+  const pitchPath = useDerivedValue(() => {
+    const path = Skia.Path.Make();
+    pitchPoints.value.forEach((p, i) => {
+      i === 0 ? path.moveTo(i * STEP, noteToY(p)) : path.lineTo(i * STEP, noteToY(p));
+    });
+    return path;
+  });
+
+  // This renders on the UI thread, zero JS overhead
+  <Canvas style={{ flex: 1 }}>
+    <Path path={pitchPath} color="#4CAF50" style="stroke" strokeWidth={2} />
+  </Canvas>
+
+If Skia feels too complex, victory-native (recharts for RN) is a good fallback
+for a non-real-time playback view of recorded sessions.
+
+
+================================================================================
+PRIORITY 3 — HIGH: UX FEATURES MISSING vs. VOCAL PITCH MONITOR PRO
+================================================================================
+
+IMPROVEMENT 3.1 — HOLD Button (Most-Praised Feature)
+-----------------------------------------------------
+Tap to freeze the graph mid-stream. Lets the user examine a specific moment
+without having to record and scrub. Simple to implement:
+
+  const [isHeld, setIsHeld] = useState(false);
+
+  // In audio callback:
+  if (!isHeld) {
+    pitchBuffer.current.push(frequency);
+  }
+
+  // In UI:
+  <TouchableOpacity onPress={() => setIsHeld(h => !h)}>
+    <Text style={styles.holdButton}>{isHeld ? '▶ RESUME' : '⏸ HOLD'}</Text>
+  </TouchableOpacity>
+
+UI placement: top-right corner, always visible, high contrast.
+
+
+IMPROVEMENT 3.2 — Musical Note Name Overlay
+--------------------------------------------
+Display the current detected note name (e.g. "A4", "C#3") prominently at the
+top of the screen in large type. This is the feature users look at most.
+
+Frequency → Note conversion in TypeScript:
+  function frequencyToNote(freq: number): string {
+    if (freq <= 0) return '--';
+    const A4 = 440.0;
+    const semitones = Math.round(12 * Math.log2(freq / A4));
+    const noteNames = ['A','A#','B','C','C#','D','D#','E','F','F#','G','G#'];
+    const octave = 4 + Math.floor((semitones + 9) / 12);
+    const noteIndex = ((semitones % 12) + 12) % 12;
+    return `${noteNames[noteIndex]}${octave}`;
+  }
+
+Or use `react-native-live-pitch-detection` which returns note names natively.
+
+
+IMPROVEMENT 3.3 — Per-Note Color Coding on the Y-Axis
+------------------------------------------------------
+Vocal Pitch Monitor lets you assign colors to each of the 12 chromatic notes.
+This makes the graph dramatically more readable at a glance.
+
+  const NOTE_COLORS: Record<string, string> = {
+    'C':  '#FF5252',  // Red
+    'C#': '#FF7043',
+    'D':  '#FF9800',
+    'D#': '#FFC107',
+    'E':  '#8BC34A',
+    'F':  '#4CAF50',
+    'F#': '#009688',
+    'G':  '#03A9F4',
+    'G#': '#3F51B5',
+    'A':  '#9C27B0',
+    'A#': '#E91E63',
+    'B':  '#F44336',
+  };
+
+
+IMPROVEMENT 3.4 — Recording & Playback with Session Save/Load
+-------------------------------------------------------------
+This is the Pro feature in Vocal Pitch Monitor — record a 3-5 minute session,
+play it back with the pitch graph scrolling in sync with the audio.
+
+Stack:
+  - expo-av for audio recording/playback
+  - expo-file-system for saving .wav files
+  - expo-sqlite for storing session metadata (title, date, duration, file path)
+
+Sessions screen should show:
+  - Session name (auto-named by date, user-renameable)
+  - Duration
+  - Pitch range summary (lowest note – highest note)
+  - Play button that replays both audio AND graph animation
+
+
+IMPROVEMENT 3.5 — A4 Calibration Setting
+-----------------------------------------
+Standard is 440Hz but orchestras and some singers use 432Hz or 445Hz.
+Add a settings screen with a slider: A4 = 430–450Hz.
+
+All pitch calculations should use this value:
+  const a4Hz = useStore(state => state.a4Calibration); // default 440
+  const semitones = 12 * Math.log2(freq / a4Hz);
+
+
+================================================================================
+PRIORITY 4 — MEDIUM: CODE ARCHITECTURE & QUALITY
+================================================================================
+
+IMPROVEMENT 4.1 — Project Structure (React Native / Expo Best Practice)
+-----------------------------------------------------------------------
+Recommended folder structure for musicians-scratchpad:
+
+  src/
+    screens/
+      HomeScreen.tsx          ← main pitch graph view
+      RecordingsScreen.tsx    ← saved sessions list
+      SessionPlaybackScreen.tsx
+      SettingsScreen.tsx
+    components/
+      PitchGraph.tsx          ← the canvas graph component
+      NoteDisplay.tsx         ← large note name at top
+      HoldButton.tsx
+      WaveformBar.tsx         ← optional mic input level indicator
+    navigation/
+      RootNavigator.tsx
+    hooks/
+      usePitchDetection.ts    ← wraps native module events
+      useAudioSession.ts      ← handles mic permissions + audio focus
+    store/
+      pitchStore.ts           ← Zustand store
+      settingsStore.ts
+    database/
+      db.ts                   ← all SQLite queries in one place
+    utils/
+      pitchMath.ts            ← frequencyToNote, noteToY, etc.
+      audioHelpers.ts
+    theme/
+      colors.ts
+      typography.ts
+      spacing.ts
+
+
+IMPROVEMENT 4.2 — State Management with Zustand
+------------------------------------------------
+If using useState scattered across screens, migrate to Zustand:
+
+  npm install zustand
+
+  // store/settingsStore.ts
+  import { create } from 'zustand';
+  import { persist } from 'zustand/middleware';
+
+  interface SettingsState {
+    a4Calibration: number;
+    noiseFloorDb: number;
+    showSemitones: boolean;
+    noteColors: Record<string, string>;
+    setA4: (hz: number) => void;
+    setNoiseFloor: (db: number) => void;
+  }
+
+  export const useSettingsStore = create<SettingsState>()(
+    persist(
+      (set) => ({
+        a4Calibration: 440,
+        noiseFloorDb: -50,
+        showSemitones: true,
+        noteColors: NOTE_COLORS,
+        setA4: (hz) => set({ a4Calibration: hz }),
+        setNoiseFloor: (db) => set({ noiseFloorDb: db }),
+      }),
+      { name: 'settings-storage' }  // auto-persists to AsyncStorage
+    )
+  );
+
+
+IMPROVEMENT 4.3 — TypeScript Strict Mode
+-----------------------------------------
+Enable strict TypeScript to catch null reference bugs early (common with audio
+callbacks that may return null when no pitch is detected):
+
+  // tsconfig.json
+  {
+    "compilerOptions": {
+      "strict": true,
+      "noUncheckedIndexedAccess": true,
+      "exactOptionalPropertyTypes": true
+    }
+  }
+
+Pay special attention to typing the native module bridge — pitch callbacks
+should be typed as:
+  type PitchEvent = { frequency: number | null; note: string; octave: number };
+
+
+IMPROVEMENT 4.4 — Native Module Error Handling
+-----------------------------------------------
+Audio modules can fail silently if permissions aren't granted or AudioRecord
+initialization fails. Always expose errors back to JS:
+
+  // Kotlin
+  fun startRecording(promise: Promise) {
+      try {
+          if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
+              promise.reject("AUDIO_INIT_ERROR", "AudioRecord failed to initialize")
+              return
+          }
+          audioRecord.startRecording()
+          promise.resolve(null)
+      } catch (e: Exception) {
+          promise.reject("AUDIO_ERROR", e.message)
+      }
+  }
+
+  // TypeScript — always handle the error
+  try {
+    await NativeAudioModule.startRecording();
+  } catch (error) {
+    if (error.code === 'AUDIO_INIT_ERROR') {
+      Alert.alert('Microphone Error', 'Could not initialize audio. Check permissions.');
+    }
+  }
+
+
+================================================================================
+PRIORITY 5 — LOW: POLISH & PUBLISHING READINESS
+================================================================================
+
+IMPROVEMENT 5.1 — Dark Mode Support
+-------------------------------------
+Audio/music apps are almost always used in dark environments (studios, stages,
+dark rooms). Dark mode should be the default, not an afterthought.
+
+Use semantic color tokens:
+  // theme/colors.ts
+  export const Colors = {
+    background: { light: '#FFFFFF', dark: '#0A0A0A' },
+    surface:    { light: '#F5F5F5', dark: '#1A1A1A' },
+    primary:    { light: '#4CAF50', dark: '#66BB6A' },
+    text:       { light: '#1A1A1A', dark: '#F5F5F5' },
+    noteActive: { light: '#FF5252', dark: '#EF9A9A' },
+  };
+
+  const scheme = useColorScheme();
+  const bg = Colors.background[scheme ?? 'dark'];
+
+
+IMPROVEMENT 5.2 — Microphone Permission UX
+-------------------------------------------
+Never let the user hit a blank screen or silent failure. Guide them explicitly:
+
+  1. On first launch: show a brief explanation screen BEFORE requesting permission
+     "Musician's Scratchpad needs microphone access to detect your pitch."
+     [Allow Microphone] button
+
+  2. If permission denied: show a non-dismissible banner with a "Open Settings" button
+     that deep-links to the app's permission settings.
+
+  import { Linking } from 'react-native';
+  <Button onPress={() => Linking.openSettings()} title="Open Settings" />
+
+
+IMPROVEMENT 5.3 — CI/CD GitHub Actions Improvements
+-----------------------------------------------------
+You already have .github/workflows — make sure these jobs are included:
+
+  Job 1: lint-and-typecheck
+    - npx tsc --noEmit
+    - npx eslint src/ --ext .ts,.tsx
+
+  Job 2: test
+    - npx jest --coverage
+    (at minimum test pitchMath.ts utilities)
+
+  Job 3: eas-build (trigger on push to main)
+    - eas build --platform android --profile preview --non-interactive
+    - Upload APK artifact
+
+
+IMPROVEMENT 5.4 — Android-Specific Polish Checklist
+-----------------------------------------------------
+Before publishing:
+  [ ] Set windowSoftInputMode = "adjustResize" in AndroidManifest / app.json
+  [ ] Handle AUDIO_FOCUS_LOSS — pause pitch detection when a call comes in
+  [ ] Test on real device at 48000Hz sample rate (some Android devices default to this)
+  [ ] Foreground Service notification if app continues listening in background
+  [ ] Minimum API level: 26 (Android 8) for ENCODING_PCM_FLOAT support
+  [ ] App icon: 1024x1024 PNG, no transparency, no rounded corners
+
+
+================================================================================
+RECOMMENDED IMPLEMENTATION ORDER
+================================================================================
+
+Week 1:  Priority 1 — Fix pitch detection (YIN or ACF2+) + noise gate
+Week 2:  Priority 2 — Graph rendering performance (decouple from setState)
+Week 3:  Priority 3.1 + 3.2 — HOLD button + Note name display
+Week 4:  Priority 3.3 + 3.5 — Note colors + A4 calibration settings
+Week 5:  Priority 4 — Refactor architecture (Zustand, strict TypeScript)
+Week 6:  Priority 3.4 — Recording & session save/load
+Week 7:  Priority 5 — Polish, dark mode, CI/CD, publish prep
+
+
+================================================================================
+KEY LIBRARIES TO ADD (vs. REMOVE)
+================================================================================
+
+ADD:
+  @shopify/react-native-skia          — GPU-accelerated graph rendering
+  @techoptio/react-native-live-pitch-detection  — proven pitch + note detection
+  zustand                             — lightweight state management
+  expo-av                             — recording & playback
+  expo-file-system                    — saving session audio files
+  react-native-permissions            — clean permission handling
+
+CONSIDER REMOVING (if present):
+  Any hand-rolled zero-crossing pitch detector — replace with YIN/ACF2+
+  react-native-chart-kit              — too slow for real-time audio graphs
+
+
+================================================================================
+REFERENCES
+================================================================================
+
+Vocal Pitch Monitor Pro (Google Play):
+  https://play.google.com/store/apps/details?id=com.tadaoyamaoka.vocalpitchmonitornoad
+
+react-native-live-pitch-detection (GitHub):
+  https://github.com/techoptio/react-native-live-pitch-detection
+
+react-native-pitchy (GitHub):
+  https://github.com/rnheroes/react-native-pitchy
+
+React Native Skia docs:
+  https://shopify.github.io/react-native-skia/
+
+YIN algorithm paper (de Cheveigné & Kawahara, 2002):
+  https://doi.org/10.1121/1.1458024
+
+pitchfinder.js (YIN, McLeod, AMDF, Wavelet in JavaScript):
+  https://github.com/peterkhayes/pitchfinder
+
+================================================================================
+END OF PLAN
+================================================================================
