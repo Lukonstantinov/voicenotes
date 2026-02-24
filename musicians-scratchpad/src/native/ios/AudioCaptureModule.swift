@@ -5,9 +5,9 @@ import os.log
 // MARK: - Constants
 
 private let kYinThreshold: Float     = 0.12
-private let kConfidenceEnter: Float  = 0.85
-private let kConfidenceExit: Float   = 0.75
-private let kRmsSilenceDb: Float     = -40.0
+private let kConfidenceEnter: Float  = 0.80
+private let kConfidenceExit: Float   = 0.70
+private let kRmsSilenceDb: Float     = -50.0
 private let kMinFrequency: Float     = 75.0
 private let kMaxFrequency: Float     = 2000.0
 private let kMedianWindow: Int       = 3
